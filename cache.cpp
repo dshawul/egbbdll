@@ -1,4 +1,5 @@
 #include "cache.h"
+#include <cstring>
 
 CACHE* LRU_CACHE::cache;
 LRU_CACHE* LRU_CACHE::lru_head;

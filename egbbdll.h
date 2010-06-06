@@ -40,3 +40,4 @@ DLLExport void CDECL unload_egbb_from_ram(int side,int* piece);
 DLLExport void CDECL open_egbb(int* piece);
 
 #endif
+
