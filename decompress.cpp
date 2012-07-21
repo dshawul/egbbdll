@@ -169,15 +169,12 @@ int COMP_INFO::decode(
 /*
 open encoded file
 */
-bool COMP_INFO::open(char* name) {
+bool COMP_INFO::open(FILE* myf) {
     UBMP32 i;
 	
-	//open file
-	pf = fopen(name,"rb");
-	if(!pf) {
-		return false;
-	}
+	pf = myf;
 
+	//open file
 	huffman.cann = new CANN[huffman.MAX_LEAFS];
 	huffman_pos.cann = new CANN[huffman_pos.MAX_LEAFS];
 

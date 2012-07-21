@@ -262,6 +262,7 @@ extern PSQATTACK const sqatt;
 extern void init_sqatt();
 extern void init_indices();
 
+const char piece_name[] = "_KQRBNPkqrbnp_";
 /*
 Some defs
 */

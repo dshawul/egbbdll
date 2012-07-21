@@ -24,7 +24,6 @@ EGBB
 */
 char EGBB::path[256];
 map<int,EGBB*> egbbs;
-static const char piece_name[] = "_KQRBNPkqrbnp_";
 
 int EGBB::GetIndex(ENUMERATOR* penum) {
 	penum->sort(0);
@@ -54,13 +53,15 @@ void EGBB::open(int egbb_state) {
 	} else {
 		strcat(name,".bin");
 	}
+
+	pf = fopen(name,"rb");
+	if(!pf) {
+		return;
+	}
+
 	//Decompresed in ram/disk
 	if(!is_comp(state)) {  
-		
-		pf = fopen(name,"rb");
-		if(!pf)
-			return;
-		
+
 		//get size of file and allocate buffers
 		UBMP32 TB_SIZE;
 		fseek(pf,0,SEEK_END);
@@ -75,7 +76,7 @@ void EGBB::open(int egbb_state) {
 		}
 	//compresed in ram/disk
 	} else {   
-		if(!COMP_INFO::open(name))
+		if(!COMP_INFO::open(pf))
 			return;
 
 		//compressed files in RAM
@@ -87,6 +88,7 @@ void EGBB::open(int egbb_state) {
 			}
 		}
 	}
+
 	is_loaded = true;
 }
 /*
@@ -379,6 +381,7 @@ int SEARCHER::get_score(
 			my_pic[i] = piece[i];
 			my_sq[i] = SQ6488(square[i]);
 		}
+		my_pic[i] = 0;
 
 		//set up position if we are at the root
 		if(ply == 0)
@@ -652,8 +655,7 @@ int probe_egbb_xxx(int player,int* piece,int* square) {
 	} else if(score == DRAW) {
 		return 0;
 	} else {
-		return score;
-		//return eval(player,piece,square,score);
+		return eval(player,piece,square,score);
 	}
 }
 
@@ -672,7 +674,7 @@ DLLExport int CDECL probe_egbb(int player, int w_king, int b_king,
 	piece[1] =  bking; square[1] = b_king;
 	piece[2] = piece1; square[2] = square1;
 	piece[3] = piece2; square[3] = square2;
-	piece[4] = _EMPTY; square[4] = INVALID;
+	piece[4] = _EMPTY; square[4] = 0;
 	return probe_egbb_xxx(player,piece,square);
 }
 /*
@@ -692,7 +694,7 @@ DLLExport int  CDECL probe_egbb_5men(int player, int w_king, int b_king,
 	piece[2] = piece1; square[2] = square1;
 	piece[3] = piece2; square[3] = square2;
 	piece[4] = piece3; square[4] = square3;
-	piece[5] = _EMPTY; square[5] = INVALID;
+	piece[5] = _EMPTY; square[5] = 0;
 	return probe_egbb_xxx(player,piece,square);
 }
 /*

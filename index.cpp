@@ -1,4 +1,3 @@
-
 #include "common.h"
 
 /*
@@ -281,8 +280,6 @@ void get_squares_like(int* sq,const int N,const int index) {
 /*
  * globals
  */
-static const char piece_name[] = "_kqrbnpkqrbnpZ";
-
 static const int piece_v[15] = {
 	0,0,975,500,326,325,100,0,975,500,326,325,100,0
 };
@@ -327,7 +324,7 @@ void ENUMERATOR::sort(int type) {
     /*who is stronger?*/
 	if(vcount[white] > vcount[black]) stronger = white;
 	else if(vcount[black] > vcount[white]) stronger = black;
-	else stronger = player;
+	else stronger = white;
 
 	/*ordered list*/
 	for(i = 0;i < n_piece;i++) {
@@ -357,8 +354,9 @@ void ENUMERATOR::init() {
 		i,j,pic;
 
 	/*name*/
-	for(i = 0;i < n_piece; i++)
+	for(i = 0;i < n_piece; i++) {
 		name[i] = piece_name[piece[i]];
+	}
 	name[i++] = '.';
 	name[i++] = (player == white) ? 'w':'b';
 	name[i++] = 0;

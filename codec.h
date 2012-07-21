@@ -141,9 +141,9 @@ public:
 	HUFFMAN huffman_pos;
     COMP_INFO();
 public:
-	bool open(char*);
-	void compress(char*,char*);
-	void decompress(char*,char*);
+	bool open(FILE*);
+	void compress(FILE*,FILE*);
+	void decompress(FILE*,FILE*);
 	void collect_frequency(UBMP8*,UBMP32);
 	int encode(UBMP8*,UBMP8*,UBMP32);
 	int decode(UBMP8*,UBMP8*,UBMP32);
