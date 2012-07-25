@@ -483,15 +483,15 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 		/*start and finish*/
 		int k,l,temp,start,finish;
 		ispawn = (PIECE(piece[i]) == pawn);
-		start = (ispawn ? 2 : 0);
+		start = (ispawn ? pawn_loc : 0);
 		finish = i;
-		if(i > 2 && index[i - 1] == 1) {
+		if(i > 1 && index[i - 1] == 1) {
 			finish = i - 1;
-			if(i > 3 && index[i - 2] == 1) {
+			if(i > 2 && index[i - 2] == 1) {
 				finish = i - 2;
-				if(i > 4 && index[i - 3] == 1) {
+				if(i > 3 && index[i - 3] == 1) {
 					finish = i - 3;
-					if(i > 5 && index[i - 4] == 1) {
+					if(i > 4 && index[i - 4] == 1) {
 						finish = i - 4;
 					}
 				}
