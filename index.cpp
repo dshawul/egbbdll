@@ -290,17 +290,10 @@ static const int piece_v[15] = {
  *  - Or for slicing egbbs
  */
 static const int piece_order[2][12] = {
-
-#ifdef PAWN_SLICE
-	/*Pawn slicing*/
+	/* The first four are for reserved for pawns & kings only
+	 * The rest of the pieces take the remaining 8*/
 	{bpawn,wpawn,bking,wking,bqueen,wqueen,brook,wrook,bbishop,wbishop,bknight,wknight},   
 	{wpawn,bpawn,wking,bking,wqueen,bqueen,wrook,brook,wbishop,bbishop,wknight,bknight}
-#else
-	/*KK slicing*/
-	{bking,wking,bpawn,wpawn,bqueen,wqueen,brook,wrook,bbishop,wbishop,bknight,wknight},
-	{wking,bking,wpawn,bpawn,wqueen,bqueen,wrook,brook,wbishop,bbishop,wknight,bknight}
-#endif
-
 };
 /*
  * Original piece order
@@ -409,7 +402,7 @@ void ENUMERATOR::init() {
 	}
 
 	/*same pieces*/
-	for(i = 0;i < n_piece; i++) {
+	for(i = 1;i < n_piece; i++) {
 		for(j = i + 1;j < n_piece;j++) {
 			if(piece[i] != piece[j]) break;
 		}
@@ -478,9 +471,6 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 		}
 	}
 
-    /*init index to zero*/
-    pindex = 0;
-
 	/*legal placement based on other piece location*/
 	for(i = n_piece - 1;i >= 0; --i) {
 
@@ -526,11 +516,14 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 	}
 
 	/*primary locations*/
+	pindex = 0;
 	for(i = n_piece - 1;i >= 0; --i) {
 		/*king squares*/
 		if(i == king_loc + 1) {
-			if(n_pawn) temp = KK_WP_index[square[i - 1] * 64 + square[i]];
-			else temp = KK_index[square[i - 1] * 64 + square[i]];
+			if(n_pawn) 
+				temp = KK_WP_index[square[i - 1] * 64 + square[i]];
+			else 
+				temp = KK_index[square[i - 1] * 64 + square[i]];
 			pindex += temp * divisor[i];
 			--i;
 			continue;
