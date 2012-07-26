@@ -6,8 +6,6 @@ const int col_tab[15] = {neutral,white,white,white,white,white,white,
 black,black,black,black,black,black,neutral};
 const int pic_tab[15] = {empty,king,queen,rook,bishop,knight,pawn,
 king,queen,rook,bishop,knight,pawn,elephant};
-SQATTACK  temp_sqatt[0x101];
-PSQATTACK const sqatt = &temp_sqatt[0x80];
 
 /*
 MOVES
@@ -61,7 +59,7 @@ void SEARCHER::do_move(const int& move) {
 	/*update current state*/
 	epsquare = 0;
 	fifty++;
-	if(DECOMB(player,m_piece(move)) == pawn) {
+	if(PIECE(m_piece(move)) == pawn) {
 		fifty = 0;
 	    if(to - from == (2 * pawn_dir[player])) {
             epsquare = ((to + from) >> 1);
@@ -137,7 +135,7 @@ void SEARCHER::undo_move(const int& move) {
 	}
 }
 /*
-generate moves
+generate all
 */
 #define NK_MOVES(dir) {										            \
 		to = from + dir;										        \
@@ -164,7 +162,7 @@ void SEARCHER::gen_all() {
 	if(player == white) {
 
 		/*castling*/
-		if(!attacks(black,E1)) {
+		if((castle & WSLC_FLAG) && !attacks(black,E1)) {
 			if(castle & WSC_FLAG &&
 				board[F1] == empty &&
 				board[G1] == empty &&
@@ -308,7 +306,7 @@ void SEARCHER::gen_all() {
 		/*end*/
 	} else {
 		/*castling*/
-		if(!attacks(white,E8)) {
+		if((castle & BSLC_FLAG) && !attacks(white,E8)) {
 			if(castle & BSC_FLAG &&
 				board[F8] == empty &&
 				board[G8] == empty &&
@@ -454,9 +452,7 @@ void SEARCHER::gen_all() {
 	/*count*/
 	pstack->count += int(pmove - spmove);
 }
-/*
-constructor
-*/
+/*constructor*/
 SEARCHER::SEARCHER() : board(&temp_board[48])
 {
 	int sq;
@@ -471,9 +467,9 @@ SEARCHER::SEARCHER() : board(&temp_board[48])
 		if(sq & 0x88)
            board[sq] = elephant;
 	}
-	used = 0;
 }
 
+/*init data*/
 void SEARCHER::init_data() {
 	register int i,sq,pic;
 
@@ -497,9 +493,10 @@ void SEARCHER::init_data() {
 	}
 }
 
+/*set pos*/
 void SEARCHER::set_pos(int side,int* piece,int* square) {
 
-    register int sq,i;
+    register int i,sq;
 	for(sq = A1;sq <= H8;sq++) {
 		if(!(sq & 0x88)) {
 			board[sq] = empty;
@@ -508,9 +505,11 @@ void SEARCHER::set_pos(int side,int* piece,int* square) {
 		}
 	}
 
-	for(i = 0;i < MAX_PIECES && piece[i];i++) {
-		board[square[i]] = piece[i];
+	for(i = 0;i < MAX_PIECES;i++) {
+		if(piece[i]) 
+			board[SQ6488(square[i])] = piece[i];
 	}
+
 	player = side;
 	opponent = invert(side);
 	castle = 0;
@@ -518,37 +517,52 @@ void SEARCHER::set_pos(int side,int* piece,int* square) {
 	fifty = 0;
 	init_data();
 }
+/*attacks*/
+static const UBMP8 t_sqatt_pieces[] = {
+  0,  0,  0,  0,  0,  0,  0,  0,  0, 10,  0,  0,  0,  0,  0,  0,
+  6,  0,  0,  0,  0,  0,  0, 10,  0,  0, 10,  0,  0,  0,  0,  0,
+  6,  0,  0,  0,  0,  0, 10,  0,  0,  0,  0, 10,  0,  0,  0,  0,
+  6,  0,  0,  0,  0, 10,  0,  0,  0,  0,  0,  0, 10,  0,  0,  0,
+  6,  0,  0,  0, 10,  0,  0,  0,  0,  0,  0,  0,  0, 10,  0,  0,
+  6,  0,  0, 10,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 10, 16,
+  6, 16, 10,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 16, 75,
+  7, 75, 16,  0,  0,  0,  0,  0,  0,  6,  6,  6,  6,  6,  6,  7,
+  0,  7,  6,  6,  6,  6,  6,  6,  0,  0,  0,  0,  0,  0, 16, 43,
+  7, 43, 16,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 10, 16,
+  6, 16, 10,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 10,  0,  0,
+  6,  0,  0, 10,  0,  0,  0,  0,  0,  0,  0,  0, 10,  0,  0,  0,
+  6,  0,  0,  0, 10,  0,  0,  0,  0,  0,  0, 10,  0,  0,  0,  0,
+  6,  0,  0,  0,  0, 10,  0,  0,  0,  0, 10,  0,  0,  0,  0,  0,
+  6,  0,  0,  0,  0,  0, 10,  0,  0, 10,  0,  0,  0,  0,  0,  0,
+  6,  0,  0,  0,  0,  0,  0, 10,  0,  0,  0,  0,  0,  0,  0,  0
+};
 
-/*initialize square attack table*/
-void init_sqatt() {
-	const int king_step[8] = {RR , LL , UU , DD , RU , LD , LU , RD};
-    const int knight_step[8] = {RRU , LLD , LLU , RRD , RUU , LDD , LUU , RDD};
-	int i,j;
-    for(i = 0;i < 0x101; i++) {
-		temp_sqatt[i].pieces = 0;
-        temp_sqatt[i].step = 0;
-	}
-	sqatt[RU].pieces |= WPM;
-    sqatt[LU].pieces |= WPM;
-    sqatt[RD].pieces |= BPM;
-    sqatt[LD].pieces |= BPM;
-	for(i = 0;i < 8;i++) {
-		sqatt[king_step[i]].pieces |= KM;
-		sqatt[knight_step[i]].pieces |= NM;
-		for(j = 1;j < 8; j++) {
-			sqatt[king_step[i] * j].step = king_step[i];
-			if(i < 4)
-                sqatt[king_step[i] * j].pieces |= (RM | QM);
-            else
-				sqatt[king_step[i] * j].pieces |= (BM | QM);
-		}
-	}
-}
+static const BMP8 t_sqatt_step[] = {
+  0,  0,  0,  0,  0,  0,  0,  0,  0,-17,  0,  0,  0,  0,  0,  0,
+-16,  0,  0,  0,  0,  0,  0,-15,  0,  0,-17,  0,  0,  0,  0,  0,
+-16,  0,  0,  0,  0,  0,-15,  0,  0,  0,  0,-17,  0,  0,  0,  0,
+-16,  0,  0,  0,  0,-15,  0,  0,  0,  0,  0,  0,-17,  0,  0,  0,
+-16,  0,  0,  0,-15,  0,  0,  0,  0,  0,  0,  0,  0,-17,  0,  0,
+-16,  0,  0,-15,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,-17,  0,
+-16,  0,-15,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,-17,
+-16,-15,  0,  0,  0,  0,  0,  0,  0, -1, -1, -1, -1, -1, -1, -1,
+  0,  1,  1,  1,  1,  1,  1,  1,  0,  0,  0,  0,  0,  0,  0, 15,
+ 16, 17,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 15,  0,
+ 16,  0, 17,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 15,  0,  0,
+ 16,  0,  0, 17,  0,  0,  0,  0,  0,  0,  0,  0, 15,  0,  0,  0,
+ 16,  0,  0,  0, 17,  0,  0,  0,  0,  0,  0, 15,  0,  0,  0,  0,
+ 16,  0,  0,  0,  0, 17,  0,  0,  0,  0, 15,  0,  0,  0,  0,  0,
+ 16,  0,  0,  0,  0,  0, 17,  0,  0, 15,  0,  0,  0,  0,  0,  0,
+ 16,  0,  0,  0,  0,  0,  0, 17,  0,  0,  0,  0,  0,  0,  0,  0
+};
+
+const UBMP8* const _sqatt_pieces = t_sqatt_pieces + 0x80;
+const BMP8* const _sqatt_step = t_sqatt_step + 0x80;
 
 /*any blocking piece in between?*/
-int SEARCHER::blocked(int from, int to) {
+int SEARCHER::blocked(int from, int to) const {
 	register int step,sq;
-	if(step = sqatt[to - from].step) {
+	if(step = sqatt_step(to - from)) {
 		sq = from + step;
 		while(board[sq] == empty && (sq != to)) sq += step;
 		return (sq != to);
@@ -557,8 +571,8 @@ int SEARCHER::blocked(int from, int to) {
 };
 
 /*is square attacked by color?*/
-int SEARCHER::attacks(int col,int sq) {
-	register PLIST current;
+int SEARCHER::attacks(int col,int sq) const {
+    register PLIST current;
 	
 	if(col == white) {
 		/*pawn*/
@@ -567,36 +581,36 @@ int SEARCHER::attacks(int col,int sq) {
 		/*knight*/
 		current = plist[wknight];
 		while(current) {
-			if(sqatt[sq - current->sq].pieces & NM)
+			if(sqatt_pieces(sq - current->sq) & NM)
 				return true;
 			current = current->next;
 		}
 		/*bishop*/
 		current = plist[wbishop];
 		while(current) {
-			if(sqatt[sq - current->sq].pieces & BM)
-				if(blocked(current->sq,sq) == false)
+			if(sqatt_pieces(sq - current->sq) & BM)
+				if(!blocked(current->sq,sq))
 					return true;
 			current = current->next;
 		}
 		/*rook*/
 		current = plist[wrook];
 		while(current) {
-			if(sqatt[sq - current->sq].pieces & RM)
-				if(blocked(current->sq,sq) == false)
+			if(sqatt_pieces(sq - current->sq) & RM)
+				if(!blocked(current->sq,sq))
 					return true;
 			current = current->next;
 		}
 		/*queen*/
 		current = plist[wqueen];
 		while(current) {
-			if(sqatt[sq - current->sq].pieces & QM)
-				if(blocked(current->sq,sq) == false)
+			if(sqatt_pieces(sq - current->sq) & QM)
+				if(!blocked(current->sq,sq))
 					return true;
 			current = current->next;
 		}
 		/*king*/
-		if(sqatt[sq - plist[wking]->sq].pieces & KM)
+		if(sqatt_pieces(sq - plist[wking]->sq) & KM)
 			return true;
 	} else if(col == black) {
 		/*pawn*/
@@ -605,38 +619,37 @@ int SEARCHER::attacks(int col,int sq) {
 		/*knight*/
 		current = plist[bknight];
 		while(current) {
-			if(sqatt[sq - current->sq].pieces & NM)
+			if(sqatt_pieces(sq - current->sq) & NM)
 				return true;
 			current = current->next;
 		}
 		/*bishop*/
 		current = plist[bbishop];
 		while(current) {
-			if(sqatt[sq - current->sq].pieces & BM)
-				if(blocked(current->sq,sq) == false)
+			if(sqatt_pieces(sq - current->sq) & BM)
+				if(!blocked(current->sq,sq))
 					return true;
 			current = current->next;
 		}
 		/*rook*/
 		current = plist[brook];
 		while(current) {
-			if(sqatt[sq - current->sq].pieces & RM)
-				if(blocked(current->sq,sq) == false)
+			if(sqatt_pieces(sq - current->sq) & RM)
+				if(!blocked(current->sq,sq))
 					return true;
 			current = current->next;
 		}
 		/*queen*/
 		current = plist[bqueen];
 		while(current) {
-			if(sqatt[sq - current->sq].pieces & QM)
-				if(blocked(current->sq,sq) == false)
+			if(sqatt_pieces(sq - current->sq) & QM)
+				if(!blocked(current->sq,sq))
 					return true;
 			current = current->next;
 		}
 		/*king*/
-		if(sqatt[sq - plist[bking]->sq].pieces & KM)
+		if(sqatt_pieces(sq - plist[bking]->sq) & KM)
 			return true;
 	}
 	return false;
 }
-

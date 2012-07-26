@@ -214,7 +214,6 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 	printf("EgbbProbe 4.0 by Daniel Shawul\n");
 	fflush(stdout);
 
-	init_sqatt();
 	init_indices();
 	LRU_CACHE::alloc( cache_size );
     l_create(searcher_lock);

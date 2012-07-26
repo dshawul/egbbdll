@@ -152,11 +152,6 @@ enum RESULTS{
 /*
 Type definitions
 */
-typedef struct SQATTACK {
-	int   step;
-	int   pieces;
-}*PSQATTACK;
-
 typedef struct LIST{
 	int   sq;
 	LIST* prev;
@@ -194,8 +189,8 @@ typedef struct SEARCHER{
 	UBMP8 temp_block[BLOCK_SIZE];
 	
 	SEARCHER();
-	int   blocked(int,int);
-	int   attacks(int,int);
+	int   blocked(int,int) const;
+	int   attacks(int,int) const;
 	void  pcAdd(int,int);
 	void  pcRemove(int,int);
 	void  pcSwap(int,int);
@@ -256,13 +251,17 @@ globals
 extern const int col_tab[15];
 extern const int pic_tab[15];
 extern const int pawn_dir[2];
-extern SQATTACK  temp_sqatt[0x101];
-extern PSQATTACK const sqatt;
 
 extern void init_sqatt();
 extern void init_indices();
 
 const char piece_name[] = "_KQRBNPkqrbnp_";
+
+extern const UBMP8* const _sqatt_pieces;
+extern const BMP8* const _sqatt_step;
+#define sqatt_pieces(sq)        _sqatt_pieces[sq]
+#define sqatt_step(sq)          _sqatt_step[sq]
+
 /*
 Some defs
 */
