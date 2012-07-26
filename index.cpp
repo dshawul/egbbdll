@@ -410,7 +410,7 @@ void ENUMERATOR::init() {
 		}
 	}
 	/*kings*/
-	for(i = 0;i < 4;i++) {
+	for(i = 0;i < n_piece;i++) {
 		if(PIECE(piece[i]) == king) {
 			king_loc = i;
 			if(n_pawns)
@@ -428,9 +428,9 @@ void ENUMERATOR::init() {
 		}
 		j--;
 
-		/*for now limit to four similar pieces*/
-        if(j - i > 3) 
-			j = i + 3;
+		/*for now limit to five similar pieces*/
+        if(j - i > 5) 
+			j = i + 5;
 
 		/*calculate number of unique positions*/
 		if(i != j) {
@@ -443,6 +443,7 @@ void ENUMERATOR::init() {
 			case 2: index[j] /= (3 * 2 * 1); break;
 			case 3: index[j] /= (4 * 3 * 2 * 1); break;
 			case 4: index[j] /= (5 * 4 * 3 * 2 * 1); break;
+			case 5: index[j] /= (6 * 5 * 4 * 3 * 2 * 1); break;
 			}
 		}
 		i = j;
