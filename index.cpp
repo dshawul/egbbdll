@@ -4,7 +4,7 @@
 Initialize index tables and pointers
 */
 
-static UBMP8 K_TR[64] = {
+static const UBMP8 K_TR[64] = {
 	0, 1, 2, 3, 3, 2, 1, 0,
 	1, 4, 5, 6, 6, 5, 4, 1,
 	2, 5, 7, 8, 8, 7, 5, 2,
@@ -14,7 +14,7 @@ static UBMP8 K_TR[64] = {
 	1, 4, 5, 6, 6, 5, 4, 1,
 	0, 1, 2, 3, 3, 2, 1, 0
 };
-static UBMP8 K1_TR[64] = {
+static const UBMP8 K1_TR[64] = {
 	0, 1, 2, 3, 4, 5, 6, 7,
 	1, 8, 9,10,11,12,13,14,
 	2, 9,15,16,17,18,19,20,
@@ -24,7 +24,7 @@ static UBMP8 K1_TR[64] = {
 	6,13,19,24,28,31,33,34,
 	7,14,20,25,29,32,34,35
 };
-static UBMP8 K2_TR[64] = {
+static const UBMP8 K2_TR[64] = {
 	0, 1, 2, 3, 3, 2, 1, 0,
 	4, 5, 6, 7, 7, 6, 5, 4,
 	8, 9,10,11,11,10, 9, 8,
@@ -32,7 +32,27 @@ static UBMP8 K2_TR[64] = {
    16,17,18,19,19,18,17,16,
    20,21,22,23,23,22,21,20,
    24,25,26,27,27,26,25,24,
-   28,29,30,31,31,30,29,28,
+   28,29,30,31,31,30,29,28
+};
+static const UBMP8 _mirror64SL[] = {
+	 0, 0, 0, 0, 0, 0, 0, 0,
+	48,40,32,24,16, 8,55,47,
+	39,31,23,15,49,41,33,25,
+	17, 9,54,46,38,30,22,14,
+	50,42,34,26,18,10,53,45,
+	37,29,21,13,51,43,35,27,
+	19,11,52,44,36,28,20,12,
+	 0, 0, 0, 0, 0, 0, 0, 0
+};
+static const UBMP8 _mirrorSL64[] = {
+	 0, 0, 0, 0, 0, 0, 0, 0,
+	13,25,37,49,55,43,31,19,
+	12,24,36,48,54,42,30,18,
+	11,23,35,47,53,41,29,17,
+	10,22,34,46,52,40,28,16,
+	 9,21,33,45,51,39,27,15,
+	 8,20,32,44,50,38,26,14,
+	 0, 0, 0, 0, 0, 0, 0, 0
 };
 
 BMP16 KK_index[4096];
@@ -42,6 +62,8 @@ BMP16 KK_WP_rotation[4096];
 BMP16 KK_square[462];
 BMP16 KK_WP_square[1806];
 
+#define SQ64SL(x)   _mirror64SL[x]
+#define SQSL64(x)   _mirrorSL64[x]
 /*
 Initialize index tables and pointers
 */
@@ -388,17 +410,15 @@ void ENUMERATOR::init() {
 		}
 	}
 	/*kings*/
-	if(n_pawns) {
-		for(i = 0;i < 4;i++) {
-			if(PIECE(piece[i]) == king) {
-				king_loc = i;
+	for(i = 0;i < 4;i++) {
+		if(PIECE(piece[i]) == king) {
+			king_loc = i;
+			if(n_pawns)
 				index[i + 1] = 1806;
-				break;
-			}
+			else
+				index[i + 1] = 462;
+			break;
 		}
-	} else {
-		king_loc = 0;
-		index[1] = 462;
 	}
 
 	/*same pieces*/
@@ -449,8 +469,10 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 	}
 
 	/*rotate*/
-	if(n_pawn) rot = KK_WP_rotation[square[king_loc] * 64 + square[king_loc + 1]];
-	else rot = KK_rotation[square[king_loc] * 64 + square[king_loc + 1]];
+	if(n_pawn) 
+		rot = KK_WP_rotation[square[king_loc] * 64 + square[king_loc + 1]];
+	else 
+		rot = KK_rotation[square[king_loc] * 64 + square[king_loc + 1]];
 	if(rot || special) {
 		for(i = 0;i < n_piece;i++) {
 			sq = square[i];
@@ -478,6 +500,13 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 		if(i == king_loc + 1) {
 			--i;
 			continue;
+		}
+
+		/*adjust pawn squares here*/
+		if(n_pawn && (i == pawn_loc + n_pawn - 1)) {
+			for(k = pawn_loc;k < pawn_loc + n_pawn; k++) {
+				square[k] = SQSL64(square[k]);
+			}
 		}
 
 		/*start and finish*/
@@ -511,7 +540,8 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 			}
 		}
 		for(k = finish - 1; k >= start ; k--) {
-			if(square[i] >= res1[k]) square[i]--;
+			if(square[i] >= res1[k]) 
+				square[i]--;
 		}
 	}
 
@@ -545,8 +575,10 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 			}
             temp = get_index_like(&square[i],N + 1);
 		} else {
-			if(ispawn) temp = SQ6448(square[i]);
-			else temp = square[i];	
+			if(ispawn) 
+				temp = SQ6448(square[i]);
+			else 
+				temp = square[i];	
 		}
 		pindex += temp * divisor[i + N];
 	}

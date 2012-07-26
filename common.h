@@ -87,28 +87,6 @@ enum RESULTS{
 #define MAX_PLY             70
 
 /*square*/
-/*square*/
-const int _mirror4864[] = {
-	48,40,32,24,16, 8,
-	55,47,39,31,23,15,
-	49,41,33,25,17, 9,
-	54,46,38,30,22,14,
-	50,42,34,26,18,10,
-	53,45,37,29,21,13,
-	51,43,35,27,19,11,
-	52,44,36,28,20,12
-};
-const int _mirror6448[] = {
-	0, 0, 0, 0, 0, 0, 0, 0,
-	5,17,29,41,47,35,23,11,
-	4,16,28,40,46,34,22,10,
-	3,15,27,39,45,33,21, 9,
-	2,14,26,38,44,32,20, 8,
-	1,13,25,37,43,31,19, 7,
-	0,12,24,36,42,30,18, 6,
-	0, 0, 0, 0, 0, 0, 0, 0
-};
-
 #define file(x)          ((x) &  7)
 #define rank(x)          ((x) >> 4)
 #define file64(x)        ((x) &  7)
@@ -117,8 +95,8 @@ const int _mirror6448[] = {
 #define SQ64(x,y)        (((x) << 3) | (y))
 #define SQ8864(x)        SQ64(rank(x),file(x))
 #define SQ6488(x)        SQ(rank64(x),file(x))
-#define SQ6448(x)        _mirror6448[x]
-#define SQ4864(x)        _mirror4864[x] 
+#define SQ6448(x)        ((x) - 8)
+#define SQ4864(x)        ((x) + 8) 
 #define MIRRORF(sq)      ((sq) ^ 0x07)
 #define MIRRORR(sq)      ((sq) ^ 0x70)
 #define MIRRORD(sq)      SQ(file(sq),rank(sq))
