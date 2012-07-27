@@ -45,7 +45,7 @@ enum SQUARES {
 		A8 = 112,B8,C8,D8,E8,F8,G8,H8
 };
 enum RESULTS{
-	DONT_KNOW = -3,ILLEGAL = -2,LOSS = -1,DRAW = 0,WIN = 1,PREDICTED = 3
+	DONT_KNOW = -3,ILLEGAL = -2,LOSS = -1,DRAW = 0,WIN = 1
 };
 
 #define RR    0x01

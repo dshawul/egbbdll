@@ -9,10 +9,6 @@ static const int WIN_SCORE  =  5000;
 enum {
 	DECOMP_IN_RAM,DECOMP_IN_DISK,COMP_IN_RAM,COMP_IN_DISK
 };
-static const int VALUE[4] = {
-	DRAW, WIN, LOSS, PREDICTED
-};
-
 #define is_in_disk(x)    ((x) & 1)
 #define is_comp(x)       ((x) & 2)
 
@@ -158,7 +154,7 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 		}
 	}
 
-	score = VALUE[(value >> (r << 1)) & 3];
+	score = 1 - ((value >> (r << 1)) & 3);
 
     return score;
 }

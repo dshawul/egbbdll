@@ -307,15 +307,14 @@ static const int piece_v[15] = {
 };
 
 /*
- * Streaming order for pieces.
+ * Streaming order for pieces for any of the following cases.
  *  - Optimized for better compression
- *  - Or for slicing egbbs
+ *  - Slicing egbbs
+ *  - Highest mobility piece placed last for better cache use
  */
 static const int piece_order[2][12] = {
-	/* The first four are for reserved for pawns & kings only
-	 * The rest of the pieces take the remaining 8*/
-	{bpawn,wpawn,bking,wking,bqueen,wqueen,brook,wrook,bbishop,wbishop,bknight,wknight},   
-	{wpawn,bpawn,wking,bking,wqueen,bqueen,wrook,brook,wbishop,bbishop,wknight,bknight}
+	{bpawn,wpawn,bking,wking,bknight,wknight,bbishop,wbishop,brook,wrook,bqueen,wqueen}, 
+	{wpawn,bpawn,wking,bking,wknight,bknight,wbishop,bbishop,wrook,brook,wqueen,bqueen}
 };
 /*
  * Original piece order
@@ -504,7 +503,7 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 		}
 
 		/*adjust pawn squares here*/
-		if(n_pawn && (i == pawn_loc + n_pawn - 1)) {
+		if(i == pawn_loc + n_pawn - 1) {
 			for(k = pawn_loc;k < pawn_loc + n_pawn; k++) {
 				square[k] = SQSL64(square[k]);
 			}
