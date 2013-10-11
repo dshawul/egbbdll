@@ -44,11 +44,8 @@ void EGBB::open(int egbb_state) {
 
 	strcpy(name,path);
 	strcat(name,enumerator.name);
-	if(is_comp(state)) {
+	if(is_comp(state))
 		strcat(name,".cmp");
-	} else {
-		strcat(name,".bin");
-	}
 
 	pf = fopen(name,"rb");
 	if(!pf) {
@@ -74,7 +71,6 @@ void EGBB::open(int egbb_state) {
 	} else {   
 		if(!COMP_INFO::open(pf))
 			return;
-
 		//compressed files in RAM
 		if(state == COMP_IN_RAM) {
 			table = new UBMP8[cmpsize];

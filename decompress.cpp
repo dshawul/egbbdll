@@ -164,7 +164,7 @@ int COMP_INFO::decode(
 		}
 	}
 
-	return (out - out_table);
+	return int(out - out_table);
 }
 /*
 open encoded file
