@@ -363,6 +363,8 @@ void ENUMERATOR::sort(int type) {
 /*
  * Initialize enumerator
  */
+//#define SIMPLE
+
 void ENUMERATOR::init() {
 	int n_pawns = 0,n_pieces = 0,order = 0,
 		i,j,pic;
@@ -397,10 +399,18 @@ void ENUMERATOR::init() {
 					n_pieces++;
 				} else if (PIECE(pic) == pawn) {
 					if(!n_pawns) pawn_loc = order;
+#ifndef SIMPLE
 					index[order] = 48 - n_pawns;
+#else
+					index[order] = 48;
+#endif
 					n_pawns++;
 				} else {
+#ifndef SIMPLE
 					index[order] = 64 - n_pieces - n_pawns;
+#else
+					index[order] = 64;
+#endif
 					n_pieces++;
 				}
 				piece[order] = pic;
@@ -420,6 +430,7 @@ void ENUMERATOR::init() {
 		}
 	}
 
+#ifndef SIMPLE
 	/*same pieces*/
 	for(i = 1;i < n_piece; i++) {
 		for(j = i + 1;j < n_piece;j++) {
@@ -447,6 +458,7 @@ void ENUMERATOR::init() {
 		}
 		i = j;
 	}
+#endif
 	/*divisor*/
 	divisor[n_piece - 1] = 1;
 	for(i = 0;i < n_piece; i++) {
@@ -463,10 +475,26 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 	MYINT temp;
 	int i,k,rot,sq,ispawn,N;
 
-	/*save*/
+#ifdef SIMPLE
 	for(i = 0;i < n_piece;i++) {
-		res2[i] = square[i];
+		for(k = 0;k < i;k++) {
+			if(square[i] == square[k])
+				return false;
+		}
 	}
+#else
+	/*illegal pawn placement on kings' square*/
+	if(n_pawn) {
+		for(i = pawn_loc;i < pawn_loc + n_pawn; i++) {
+			if(square[i] == square[king_loc] || square[i] == square[king_loc + 1]) {
+				return false;
+			}
+		}
+	}
+#endif
+
+	/*save*/
+	memcpy(res2,square,n_piece * sizeof(int));
 
 	/*rotate*/
 	if(n_pawn) 
@@ -481,15 +509,6 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 			if(rot & rotD) sq = MIRRORD64(sq);
 			if(special) sq = MIRRORD64(sq);
 			square[i] = sq;
-		}
-	}
-
-	/*illegal pawn placement on kings' square*/
-	if(n_pawn) {
-		for(i = pawn_loc;i < pawn_loc + n_pawn; i++) {
-			if(square[i] == square[king_loc] || square[i] == square[king_loc + 1]) {
-				return false;
-			}
 		}
 	}
 
@@ -509,6 +528,7 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 			}
 		}
 
+#ifndef SIMPLE
 		/*start and finish*/
 		int k,l,temp,start,finish;
 		ispawn = (PIECE(piece[i]) == pawn);
@@ -543,6 +563,8 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 			if(square[i] >= res1[k]) 
 				square[i]--;
 		}
+#endif
+		/*end*/
 	}
 
 	/*primary locations*/
@@ -561,20 +583,21 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 
         /*others*/
 		ispawn = (PIECE(piece[i]) == pawn);
-		
 		N = 0;
+#ifndef SIMPLE
 		for(;i >= 2;i--) {
 			if(index[i - 1] == 1) N++;
 			else break;
 		}
-		
 		if(N) {
 			if(ispawn) {
 				for(k = 0;k <= N;k++) 
 					square[i + k] = SQ6448(square[i + k]);
 			}
             temp = get_index_like(&square[i],N + 1);
-		} else {
+		} else 
+#endif
+		{
 			if(ispawn) 
 				temp = SQ6448(square[i]);
 			else 
@@ -584,9 +607,7 @@ bool ENUMERATOR::get_index(MYINT& pindex,bool special) {
 	}
 	
 	/*restore*/
-	for(i = 0;i < n_piece;i++) {
-		square[i] = res2[i];
-	}
+	memcpy(square,res2,n_piece * sizeof(int));
 
 	return true;
 }

@@ -3,7 +3,7 @@ CFLAGS = -O3
 DEFINES =
 LDFLAGS = 
 
-EXE = egbbdll.so
+EXE = egbbso.so
 RM = rm -rf
 OBJ = egbbdll.o moves.o index.o decompress.o codec.o cache.o
 

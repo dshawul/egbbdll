@@ -9,6 +9,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 
 #include "my_types.h"

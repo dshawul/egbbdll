@@ -1,8 +1,6 @@
 #ifndef __MY_TYPES__
 #define __MY_TYPES__
 
-#define PARALLEL
-
 /*
 64 bit machine?
 */
@@ -37,36 +35,6 @@ typedef int64_t BMP64;
 typedef uint64_t UBMP64;
 
 /*
-cache line memory alignment (64 bytes)
-*/
-#if defined (__GNUC__)
-#	define CACHE_ALIGN  __attribute__ ((aligned(64)))
-#else
-#	define CACHE_ALIGN __declspec(align(64))
-#endif
-
-/*
-Intrinsic popcnt
-*/
-#if defined(HAS_POPCNT) && defined(ARC_64BIT)
-#   if defined (__GNUC__)
-#       define popcnt(x)										\
-	({														\
-	typeof(x) __ret;									\
-	__asm__("popcnt %1, %0" : "=r" (__ret) : "r" (x));	\
-	__ret;							                    \
-})
-#   elif defined (_MSC_VER)
-#       include<intrin.h>
-#       define popcnt(b) __popcnt64(b)
-#   else
-#       include <nmmintrin.h>
-#       define popcnt(b) _mm_popcnt_u64(b)
-#   endif
-#   define popcnt_sparse(b) popcnt(b)
-#endif
-
-/*
 Os stuff
 */
 #ifdef _MSC_VER
@@ -80,6 +48,7 @@ Os stuff
 #    define FMT64    "%I64d"
 #    define FMT64W   "%20I64d"
 #    define FORCEINLINE __forceinline
+#	 define GETPID()  _getpid()
 #else
 #    include <unistd.h>
 #    include <dlfcn.h>
@@ -93,21 +62,160 @@ Os stuff
 #    define FMT64      "%lld"
 #    define FMT64W     "%20lld"
 #    define FORCEINLINE __inline
+#	 define GETPID()  getpid()
 #endif
 
-/*threads*/
-#    ifdef _MSC_VER
-#        include <process.h>
-#        define pthread_t HANDLE
-#        define t_create(f,p,t) t = (pthread_t) _beginthread(f,0,(void*)p)
-#        define t_sleep(x)    Sleep(x)
-#    else
-#        include <pthread.h>
-#        define t_create(f,p,t) pthread_create(&t,0,(void*(*)(void*))&f,(void*)p)
-#        define t_sleep(x)    usleep((x) * 1000)
-#    endif
+/*
+Intrinsic popcnt
+*/
+#if defined(HAS_POPCNT) && defined(ARC_64BIT)
+#   if defined (__GNUC__)
+#       define popcnt(x)								\
+	({													\
+	typeof(x) __ret;									\
+	__asm__("popcnt %1, %0" : "=r" (__ret) : "r" (x));	\
+	__ret;							                    \
+})
+#   elif defined (_MSC_VER)
+#       include<intrin.h>
+#       define popcnt(b) __popcnt64(b)
+#   else
+#       include <nmmintrin.h>
+#       define popcnt(b) _mm_popcnt_u64(b)
+#   endif
+#   define popcnt_sparse(b) popcnt(b)
+#endif 
 
-/*optional code*/
+/*
+cache line memory alignment (64 bytes)
+*/
+#include <cstdlib>
+#define CACHE_LINE_SIZE  64
+
+#if defined (__GNUC__)
+#	define CACHE_ALIGN  __attribute__ ((aligned(CACHE_LINE_SIZE)))
+#else
+#	define CACHE_ALIGN __declspec(align(CACHE_LINE_SIZE))
+#endif
+
+template<typename T>
+void aligned_reserve(T*& mem,const size_t& size) {
+	if((sizeof(T) & (sizeof(T) - 1)) == 0) {
+#ifdef _MSC_VER
+		if(mem) _aligned_free(mem);
+		mem = (T*)_aligned_malloc(size * sizeof(T),CACHE_LINE_SIZE);
+#else
+		if(mem) free(mem);
+		posix_memalign((void**)&mem,CACHE_LINE_SIZE,size * sizeof(T));
+#endif
+	} else {
+		if(mem) free(mem);
+		mem = (T*) malloc(size * sizeof(T));
+	}
+}
+
+template<typename T>
+void aligned_free(T*& mem) {
+	if((sizeof(T) & (sizeof(T) - 1)) == 0) {
+#ifdef _MSC_VER
+		if(mem) _aligned_free(mem);
+#else
+		if(mem) free(mem);
+#endif
+	} else {
+		if(mem) free(mem);
+	}
+	mem = 0;
+}
+/*
+Prefetch
+*/
+#if defined(HAS_PREFETCH)
+#	include <xmmintrin.h>
+#	define PREFETCH_T0(addr) _mm_prefetch(((char *)(addr)),_MM_HINT_T0);
+#else
+#	define PREFETCH_T0(addr)
+#endif
+/*
+* Threads
+*/
+#if defined PARALLEL
+#	 if defined OMP
+#		include <omp.h>
+#	 elif defined _MSC_VER
+#		include <process.h>
+#		define t_create(f,p) _beginthread(f,0,(void*)p)
+#		define t_sleep(x)    Sleep(x)
+#		define t_yield()	  SwitchToThread()
+#	 else
+#		include <pthread.h>
+#		define t_create(f,p) {pthread_t t = 0; pthread_create(&t,0,(void*(*)(void*))&f,(void*)p);}
+#		define t_sleep(x)    usleep((x) * 1000)
+#		define t_yield()	  pthread_yield()
+#	 endif
+#endif
+/*
+*locks
+*/
+#if defined PARALLEL
+#	 if defined OMP
+#		define LOCK          omp_lock_t
+#		define l_create(x)   omp_init_lock(&x)
+#		define l_lock(x)     omp_set_lock(&x)
+#		define l_unlock(x)   omp_unset_lock(&x)   
+inline void l_barrier() { 
+#		pragma omp barrier 
+}
+#    elif defined _MSC_VER
+#		define VOLATILE volatile
+#       ifdef USE_SPINLOCK
+#             define LOCK VOLATILE int
+#             define l_create(x)   ((x) = 0)
+#             define l_lock(x)     while(InterlockedExchange((LPLONG)&(x),1) != 0) {while((x) != 0);}
+#             define l_unlock(x)   ((x) = 0)
+#       else
+#             define LOCK CRITICAL_SECTION
+#             define l_create(x)   InitializeCriticalSection(&x)
+#             define l_lock(x)     EnterCriticalSection(&x)
+#             define l_unlock(x)   LeaveCriticalSection(&x)
+#       endif   
+#    else
+#			  define VOLATILE volatile
+#			  define LOCK pthread_mutex_t
+#			  define l_create(x)   pthread_mutex_init(&(x),0)
+#			  define l_lock(x)     pthread_mutex_lock(&(x))
+#			  define l_unlock(x)   pthread_mutex_unlock(&(x))
+#    endif
+#else
+#    define VOLATILE
+#    define LOCK int
+#    define l_create(x)
+#    define l_lock(x)
+#    define l_unlock(x)
+#	 define l_barrier()
+#endif
+/*
+* Performance counters
+*/
+#ifdef _MSC_VER
+typedef LARGE_INTEGER TIMER;
+#define get_perf(x)  QueryPerformanceCounter(&x)
+inline double get_diff(TIMER s,TIMER e) {
+	TIMER freq; 
+	QueryPerformanceFrequency( &freq );  
+	return (e.QuadPart - s.QuadPart)/(double(freq.QuadPart) / 1e9);
+}
+#else
+#include <ctime>
+typedef struct timespec TIMER;
+#define get_perf(x)  clock_gettime(CLOCK_MONOTONIC,&x)
+inline double get_diff(TIMER s,TIMER e) {
+	return (e.tv_sec - s.tv_sec) * 1e9 + (e.tv_nsec - s.tv_nsec);
+}
+#endif
+/*
+*optional compilation
+*/
 #ifdef PARALLEL
 #	 define SMP_CODE(x) x
 #else
@@ -124,32 +232,6 @@ Os stuff
 #    define DEBUG_CODE(x)
 #endif
 
-#ifdef PARALLEL
-#    define VOLATILE volatile
-/*locks*/
-#    ifdef _MSC_VER
-#        ifdef USE_SPINLOCK
-#             define LOCK VOLATILE int
-#             define l_create(x)   ((x) = 0)
-#             define l_lock(x)     while(InterlockedExchange((LPLONG)&(x),1) != 0) {while((x) != 0);}
-#             define l_unlock(x)   ((x) = 0)
-#        else
-#             define LOCK CRITICAL_SECTION
-#             define l_create(x)   InitializeCriticalSection(&x)
-#             define l_lock(x)     EnterCriticalSection(&x)
-#             define l_unlock(x)   LeaveCriticalSection(&x)
-#        endif   
-#    else
-#			  define LOCK pthread_mutex_t
-#			  define l_create(x)   pthread_mutex_init(&(x),0)
-#			  define l_lock(x)     pthread_mutex_lock(&(x))
-#			  define l_unlock(x)   pthread_mutex_unlock(&(x))
-#    endif
-#else
-#    define VOLATILE
-#    define l_lock(x)
-#    define l_unlock(x)
-#endif
 /*
 end
 */
