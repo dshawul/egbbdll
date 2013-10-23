@@ -1,6 +1,7 @@
 #ifndef __CACHE__
 #define __CACHE__
 
+#define PARALLEL
 #include "my_types.h"
 
 /*
@@ -46,6 +47,7 @@ public:
 	LRU_CACHE();
 	void add(INFO* info);
 	int  get(UBMP32 start_index,UBMP32 probe_index,UBMP8& value);
+	void insert_head(CACHE*);
 	void bring_to_front();
 	static void alloc(UBMP32);
 };

@@ -12,7 +12,7 @@ enum {
 #define is_in_disk(x)    ((x) & 1)
 #define is_comp(x)       ((x) & 2)
 
-static SEARCHER searchers[8];
+static SEARCHER searchers[16];
 static LOCK searcher_lock;
 
 /*

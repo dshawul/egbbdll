@@ -8,7 +8,6 @@ LOCK LRU_CACHE::lock_lru;
 UBMP32 LRU_CACHE::size;
 UBMP32 LRU_CACHE::used;
 
-
 LRU_CACHE::LRU_CACHE() {
 	tail = 0;
 	head = 0;
@@ -18,7 +17,6 @@ LRU_CACHE::LRU_CACHE() {
 }
 
 void LRU_CACHE::alloc(UBMP32 tsize) {
-
 	size  = tsize / sizeof(CACHE);
 	cache = new CACHE[size];
 	used  = 0;
@@ -28,12 +26,9 @@ void LRU_CACHE::alloc(UBMP32 tsize) {
 }
 
 /*
-brings currently accessed lru cache to the front
-of the list after add/get operations
-NB: make sure that any bucket lock is not acquired before calling
-this to avoid deadlocks
+Bring recently accessed data (after add/get) to the front of the lru-list.
+Assumes bucket lock is not acquired
 */
-
 void LRU_CACHE::bring_to_front() {
     l_lock(lock_lru);
 
@@ -62,76 +57,65 @@ void LRU_CACHE::bring_to_front() {
 	l_unlock(lock_lru);
 }
 
-void LRU_CACHE::add(INFO* info) {
+/*Replace head by new one*/
+void LRU_CACHE::insert_head(CACHE* freec) {
+	l_lock(lock);
 
-	
+	CACHE* temph = head;
+	head = freec;
+	head->next = temph;
+	if(temph)
+		temph->prev = head;
+	else
+		tail = head;
+
+	l_unlock(lock);
+}
+
+/*Add new block to LRU cache*/
+void LRU_CACHE::add(INFO* info) {
+	CACHE* freec = 0;
+
 	l_lock(lock_lru);
     if(used < size) {
-		CACHE* temph,*freec = cache + used;
+		/*we have an unused block*/
+		freec = cache + used;
 		used++;
 		l_unlock(lock_lru);
 
-		/*insert info at the free space*/
-	    l_lock(lock);
-        temph = head;
-		head = freec;
-		memcpy(&head->info,info,sizeof(INFO));
-		head->next = temph;
-		if(temph) {
-		    temph->prev = head;
-		} else {
-			tail = head;
-		}
-		l_unlock(lock);
-
 	} else { 
-		CACHE *temph,*tempt;
-
-		/*find a tail to replace*/
+		/*find a tail to replace and detach it*/
 		LRU_CACHE* lru_target = lru_tail;
 		while(lru_target) {
 			l_lock(lru_target->lock);
 			if(lru_target->head != lru_target->tail) {
-				tempt = lru_target->tail;
-				lru_target->tail = lru_target->tail->prev;
+				freec = lru_target->tail;
+				lru_target->tail = freec->prev;
 				lru_target->tail->next = 0;
+				freec->prev = 0;
 				l_unlock(lru_target->lock);
 				break;
 			}
             l_unlock(lru_target->lock);
 			lru_target = lru_target->lru_prev;
 		}
-        
 		l_unlock(lock_lru);
-
-		/*insert it at the head and copy info*/
-		l_lock(lock);
-		temph = head;
-		head = tempt;
-		head->next = temph;
-		head->prev = 0;
-		if(temph) {
-		    temph->prev = head;
-		} else {
-			tail = head;
-        }
-		memcpy(&head->info,info,sizeof(INFO));
-		l_unlock(lock);
 	}
 
+	/*insert info at the free space*/
+	memcpy(&freec->info,info,sizeof(INFO));
+	insert_head(freec);
 	bring_to_front();
 }
 
+/*check lru cache for value*/
 int LRU_CACHE::get(UBMP32 start_index,UBMP32 probe_index,UBMP8& value) {
-
 	register CACHE* curr = head;
 
 	l_lock(lock);
 	while(curr) {
 		if(curr->info.start_index == start_index) {
-			/*
-			update cache list and copy value
-			*/
+			/*update cache list and copy value*/
 			if(curr != head) {
 				if(curr == tail)
 					tail = tail->prev;
@@ -150,10 +134,7 @@ int LRU_CACHE::get(UBMP32 start_index,UBMP32 probe_index,UBMP8& value) {
 			}
 			value = head->info.block[probe_index];
 			l_unlock(lock);
-			
-			/*
-			put the lru list at the front & return a cache hit
-			*/
+			/*put the lru list at the front & return a hit*/
 			bring_to_front();
 			return CACHE_HIT;
 		}
