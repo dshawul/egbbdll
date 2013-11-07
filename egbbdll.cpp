@@ -367,30 +367,25 @@ int SEARCHER::get_score(
 	} else if(pegbb->use_search) {
 		int my_pic[MAX_PIECES],my_sq[MAX_PIECES];
 
-        //64 to 88
-		for(i = 0;i < MAX_PIECES && piece[i];i++) {
-			my_pic[i] = piece[i];
-			my_sq[i] = SQ6488(square[i]);
-		}
-		my_pic[i] = 0;
-
 		//set up position if we are at the root
 		if(ply == 0)
-			set_pos(side,my_pic,my_sq);
-		
+			set_pos(side,piece,square);
 
 		//generate moves and search
 		pstack->count = 0;
 		gen_all();
 		legal_moves = 0;
 
+		//foreach move
 		for(j = 0;j < pstack->count; j++) {
 
-			//88 to 64
-			for(i = 0;i < MAX_PIECES && piece[i];i++) {
-				my_sq[i] = SQ8864(square[i]);
+			//copy
+			for(i = 0;i < MAX_PIECES ;i++) {
+				my_pic[i] = piece[i];
+				my_sq[i] = square[i];
+				if(!piece[i]) break;
 			}
-
+			
 			//move
 			move = pstack->move_st[j];
 			do_move(move);
@@ -408,17 +403,21 @@ int SEARCHER::get_score(
 			if(m_capture(move)) {
 				for(i = 0;i < MAX_PIECES;i++) {
 					if(my_sq[i] == to) {
-						for(;i < MAX_PIECES;i++) {
+						for(;i < MAX_PIECES - 1;i++) {
 							my_pic[i] = my_pic[i + 1];
 							my_sq[i] = my_sq[i + 1];
 						}
 					}
 				}
 			}
+
 			//move piece
 			for(i = 0;i < MAX_PIECES;i++) {
 				if(my_sq[i] == from) {
 					my_sq[i] = to;
+					//promotion
+					if(m_promote(move))
+						my_pic[i] = m_promote(move);
 					break;
 				}
 			}

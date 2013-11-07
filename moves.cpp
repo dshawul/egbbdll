@@ -505,9 +505,8 @@ void SEARCHER::set_pos(int side,int* piece,int* square) {
 		}
 	}
 
-	for(i = 0;i < MAX_PIECES;i++) {
-		if(piece[i]) 
-			board[SQ6488(square[i])] = piece[i];
+	for(i = 0;i < MAX_PIECES && piece[i];i++) {
+		board[SQ6488(square[i])] = piece[i];
 	}
 
 	player = side;
