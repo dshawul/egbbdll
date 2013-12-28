@@ -696,3 +696,37 @@ DLLExport void CDECL load_egbb_xmen(char* path,int cache_size,int load_options) 
 DLLExport int  CDECL probe_egbb_xmen(int player, int* piece,int* square) {
 	return probe_egbb_xxx(player,piece,square);
 }
+/*
+fen
+*/
+DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
+	int piece[MAX_PIECES],square[MAX_PIECES],player;
+
+	/*decode fen*/
+	int sq,index = 0;
+	const char* p = fen_str,*pfen;
+	for(int r = RANK8;r >= RANK1; r--) {
+		for(int f = FILEA;f <= FILEH;f++) {
+			sq = SQ64(r,f);
+			if((pfen = strchr(piece_name,*p)) != 0) {
+				piece[index] = int(strchr(piece_name,*pfen) - piece_name);
+				square[index] = sq;
+				index++;
+			} else if((pfen = strchr(rank_name,*p)) != 0) {
+				for(int i = 0;i < pfen - rank_name;i++) {
+					f++;
+				}
+			} 
+			p++;
+		}
+		p++;
+	}
+	piece[index] = _EMPTY;
+	square[index] = 0;
+
+	/*player*/
+	if((pfen = strchr(col_name,*p)) != 0)
+		player = ((pfen - col_name) >= 2);
+
+	return probe_egbb_xxx(player,piece,square);
+}

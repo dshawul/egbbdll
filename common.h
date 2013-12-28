@@ -258,6 +258,8 @@ extern void init_sqatt();
 extern void init_indices();
 
 const char piece_name[] = "_KQRBNPkqrbnp_";
+const char rank_name[] = "12345678";
+const char col_name[] = "WwBb";
 
 extern const UBMP8* const _sqatt_pieces;
 extern const BMP8* const _sqatt_step;

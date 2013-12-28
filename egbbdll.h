@@ -32,6 +32,7 @@ DLLExport int  CDECL probe_egbb_5men(int player, int w_king, int b_king,
 			   );
 DLLExport void CDECL load_egbb_5men(char* path,int cache_size = 4194304,int load_options = LOAD_4MEN);
 /*X men*/
+DLLExport int  CDECL probe_egbb_fen(char* fen);
 DLLExport int  CDECL probe_egbb_xmen(int player, int* piece,int* square);
 DLLExport void CDECL load_egbb_xmen(char* path,int cache_size = 4194304,int load_options = LOAD_4MEN);
 /*private*/
