@@ -160,7 +160,16 @@ void SEARCHER::gen_all() {
 	PLIST current;
 	
 	if(player == white) {
-
+		/*enpassant*/
+		if(epsquare) {
+			from = epsquare + LD;
+			if(board[from] == wpawn)
+				*pmove++ = from | (epsquare<<8) | (wpawn<<16) | (bpawn<<20) | EP_FLAG;
+			
+			from = epsquare + RD;
+			if(board[from] == wpawn)
+				*pmove++ = from | (epsquare<<8) | (wpawn<<16) | (bpawn<<20) | EP_FLAG;
+		}
 		/*castling*/
 		if((castle & WSLC_FLAG) && !attacks(black,E1)) {
 			if(castle & WSC_FLAG &&
@@ -293,18 +302,18 @@ void SEARCHER::gen_all() {
 			}	
 			current = current->next;
 		}
+	} else {
 		/*enpassant*/
 		if(epsquare) {
-			from = epsquare + LD;
-			if(board[from] == wpawn)
-				*pmove++ = from | (epsquare<<8) | (wpawn<<16) | (bpawn<<20) | EP_FLAG;
+			from = epsquare + RU;
+			if(board[from] == bpawn)
+				*pmove++ = from | (epsquare<<8) | (bpawn<<16) | (wpawn<<20) | EP_FLAG;
 			
-			from = epsquare + RD;
-			if(board[from] == wpawn)
-				*pmove++ = from | (epsquare<<8) | (wpawn<<16) | (bpawn<<20) | EP_FLAG;
+			from = epsquare + LU;
+			if(board[from] == bpawn)
+				*pmove++ = from | (epsquare<<8) | (bpawn<<16) | (wpawn<<20) | EP_FLAG;
 		}
 		/*end*/
-	} else {
 		/*castling*/
 		if((castle & BSLC_FLAG) && !attacks(white,E8)) {
 			if(castle & BSC_FLAG &&
@@ -437,17 +446,7 @@ void SEARCHER::gen_all() {
 			}	
 			current = current->next;
 		}
-		/*enpassant*/
-		if(epsquare) {
-			from = epsquare + RU;
-			if(board[from] == bpawn)
-				*pmove++ = from | (epsquare<<8) | (bpawn<<16) | (wpawn<<20) | EP_FLAG;
-			
-			from = epsquare + LU;
-			if(board[from] == bpawn)
-				*pmove++ = from | (epsquare<<8) | (bpawn<<16) | (wpawn<<20) | EP_FLAG;
-		}
-		/*end*/
+
 	}
 	/*count*/
 	pstack->count += int(pmove - spmove);
@@ -466,55 +465,49 @@ SEARCHER::SEARCHER() : board(&temp_board[48])
 	for(sq = A1;sq < A1 + 128;sq++) {
 		if(sq & 0x88)
            board[sq] = elephant;
+		else
+		   board[sq] = empty;
 	}
-}
 
-/*init data*/
-void SEARCHER::init_data() {
-	register int i,sq,pic;
+	used = 0;
 
- 	ply = 0;
+	ply = 0;
 	pstack = stack + 0;
-
-	for(i = wking;i < elephant;i++) {
+	for(int i = wking;i < elephant;i++) {
        plist[i] = 0;
 	}
-
 	for(sq = A1;sq <= H8;sq++) {
 		if(!(sq & 0x88)) { 
 			list[sq]->sq = sq;
 			list[sq]->prev = 0;
 			list[sq]->next = 0;
-			pic = board[sq];
-			if(pic != empty) {
-				pcAdd(pic,sq);
-			}
 		}
 	}
 }
-
+/*clear squares*/
+void SEARCHER::clear_pos(int* piece,int* square) {
+	register int i;
+	for(i = 0;i < MAX_PIECES && piece[i];i++) {
+		int sq = SQ6488(square[i]);
+		pcRemove(piece[i],sq);
+		board[sq] = empty;
+	}
+}
 /*set pos*/
 void SEARCHER::set_pos(int side,int* piece,int* square) {
-
-    register int i,sq;
-	for(sq = A1;sq <= H8;sq++) {
-		if(!(sq & 0x88)) {
-			board[sq] = empty;
-		} else {
-			sq += 0x07;
-		}
-	}
-
+	register int i;
 	for(i = 0;i < MAX_PIECES && piece[i];i++) {
-		board[SQ6488(square[i])] = piece[i];
+		int sq = SQ6488(square[i]);
+		board[sq] = piece[i];
+		pcAdd(piece[i],sq);
 	}
-
+	epsquare = SQ6488(square[i]);
 	player = side;
 	opponent = invert(side);
-	castle = 0;
-	epsquare = 0;
 	fifty = 0;
-	init_data();
+	castle = 0;
+	ply = 0;
+	pstack = stack + 0;
 }
 /*attacks*/
 static const UBMP8 t_sqatt_pieces[] = {

@@ -12,7 +12,7 @@ enum {
 #define is_in_disk(x)    ((x) & 1)
 #define is_comp(x)       ((x) & 2)
 
-static SEARCHER searchers[16];
+static SEARCHER searchers[MAX_CPUS];
 static LOCK searcher_lock;
 
 /*
@@ -171,8 +171,10 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 	if(pegbb[0]->is_loaded) {                     \
 		if(!pegbb[1]->is_loaded)                  \
 			pegbb[1]->use_search = true;          \
+		total_loaded++;							  \
 	} else if(pegbb[1]->is_loaded) {              \
 		pegbb[0]->use_search = true;              \
+		total_loaded++;							  \
 	} else {                                      \
 		delete pegbb[0];						  \
 		delete pegbb[1];                          \
@@ -187,6 +189,7 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 	EGBB* pegbb[2];
 	ENUMERATOR* penum;
 	int side,piece[MAX_PIECES],state,state1,state2,tab_index[2];
+	int total_loaded = 0;
 
 	if(load_options == LOAD_NONE) {
         state1 = COMP_IN_DISK;
@@ -203,7 +206,7 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 	}
 	strcpy(EGBB::path,path);
 
-	printf("EgbbProbe 4.0 by Daniel Shawul\n");
+	printf("EgbbProbe 4.1 by Daniel Shawul\n");
 	fflush(stdout);
 
 	init_indices();
@@ -294,7 +297,7 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 		}
 	}
 	/*7 men*/
-	printf("\rEgbbs loaded !      \n");
+	printf("\r%d egbbs loaded !      \n",total_loaded);
 	fflush(stdout);
 }
 /*
@@ -304,7 +307,7 @@ DLLExport void CDECL open_egbb(int* piece) {
 	EGBB* pegbb[2];
 	ENUMERATOR* penum;
 	int side,state = COMP_IN_DISK,tab_index[2];
-
+	int total_loaded = 0;
 	for(side = white; side <= black;side++) ADD();
 	PRESENCE();
 }
@@ -333,7 +336,111 @@ DLLExport void CDECL unload_egbb_from_ram(int side,int* piece) {
 #undef ADD
 #undef PRESENCE
 /*
-Getscore of position. Use search whenever possible.
+Get score of children positions
+*/
+int SEARCHER::get_children_score(
+	int alpha,int beta,
+	int side, int* piece,int* square,bool onlyEp) {
+
+	int my_pic[MAX_PIECES],my_sq[MAX_PIECES];
+	int i,j,score,legal_moves;
+	int move,from,to;
+
+	//set up position if we are at the root
+	if(ply == 0)
+		set_pos(side,piece,square);
+
+	//generate moves and search
+	pstack->count = 0;
+	gen_all();
+	legal_moves = 0;
+
+	//foreach move
+	for(j = 0;j < pstack->count; j++) {
+
+		//check only enpassant
+		move = pstack->move_st[j];
+		if(onlyEp && !is_ep(move))
+			continue;
+
+		//copy
+		for(i = 0;i < MAX_PIECES ;i++) {
+			my_pic[i] = piece[i];
+			my_sq[i] = square[i];
+			if(!piece[i]) break;
+		}
+
+		//move
+		do_move(move);
+		if(attacks(player,plist[COMBINE(opponent,king)]->sq)) {
+			undo_move(move);
+			continue;
+		}
+
+		legal_moves++;
+
+		from = SQ8864(m_from(move));
+		to = SQ8864(m_to(move));
+
+		//remove captured piece
+		if(m_capture(move)) {
+			int capsq = to;
+			if(is_ep(move)) {
+				if(to > from) capsq = to - 8;
+				else capsq = to + 8;
+			}
+			for(i = 0;i < MAX_PIECES;i++) {
+				if(my_sq[i] == capsq) {
+					for(;i < MAX_PIECES - 1;i++) {
+						my_pic[i] = my_pic[i + 1];
+						my_sq[i] = my_sq[i + 1];
+					}
+				}
+			}
+		}
+
+		//move piece
+		for(i = 0;i < MAX_PIECES;i++) {
+			if(my_sq[i] == from) {
+				my_sq[i] = to;
+				//promotion
+				if(m_promote(move))
+					my_pic[i] = m_promote(move);
+				break;
+			}
+		}
+
+		//recursive call
+		score = -get_score(-beta,-alpha,player,my_pic,my_sq);
+
+		undo_move(move);
+		
+		//update alpha
+		if(score > alpha) { 
+			alpha = score;
+			if(score >= beta) {
+				alpha = beta;
+				break;
+			}
+		}
+	}
+
+	//mate/stalemate?
+	if(!onlyEp && legal_moves == 0) {
+		if(attacks(opponent,plist[COMBINE(player,king)]->sq))
+			alpha = LOSS;
+		else
+			alpha = DRAW;
+	}
+
+	//clear board before we leave
+	if(ply == 0)
+		clear_pos(piece,square);
+
+	return alpha;
+}
+/*
+Get score of position. Use search whenever possible.
 */
 int SEARCHER::get_score(
                int alpha,int beta,
@@ -344,8 +451,7 @@ int SEARCHER::get_score(
 		return DRAW;
 
 	/*get score*/
-	int i,j,score,legal_moves;
-	int move,from,to;
+	int score;
 
 	MYINT pos_index;
 	UBMP32 tab_index;
@@ -361,90 +467,24 @@ int SEARCHER::get_score(
 	/*is egbb loaded*/
 	if(pegbb->is_loaded) {
 		score = pegbb->get_score(pos_index,this);
+		/*verify enpassant captures*/
+		if(score < beta) {
+			if(ply == 0) {
+				for(int i = 2;i < MAX_PIECES;i++) {
+					if(piece[i] == _EMPTY) {
+						epsquare = SQ6488(square[i]);
+						break;
+					}
+				}
+			}
+			if(epsquare)
+				return get_children_score(score,beta,side,piece,square,true);
+		}
 		return score;
 
     /*recursive search*/
 	} else if(pegbb->use_search) {
-		int my_pic[MAX_PIECES],my_sq[MAX_PIECES];
-
-		//set up position if we are at the root
-		if(ply == 0)
-			set_pos(side,piece,square);
-
-		//generate moves and search
-		pstack->count = 0;
-		gen_all();
-		legal_moves = 0;
-
-		//foreach move
-		for(j = 0;j < pstack->count; j++) {
-
-			//copy
-			for(i = 0;i < MAX_PIECES ;i++) {
-				my_pic[i] = piece[i];
-				my_sq[i] = square[i];
-				if(!piece[i]) break;
-			}
-			
-			//move
-			move = pstack->move_st[j];
-			do_move(move);
-			if(attacks(player,plist[COMBINE(opponent,king)]->sq)) {
-				undo_move(move);
-				continue;
-			}
-
-			legal_moves++;
-
-			from = SQ8864(m_from(move));
-			to = SQ8864(m_to(move));
-
-			//remove captured piece
-			if(m_capture(move)) {
-				for(i = 0;i < MAX_PIECES;i++) {
-					if(my_sq[i] == to) {
-						for(;i < MAX_PIECES - 1;i++) {
-							my_pic[i] = my_pic[i + 1];
-							my_sq[i] = my_sq[i + 1];
-						}
-					}
-				}
-			}
-
-			//move piece
-			for(i = 0;i < MAX_PIECES;i++) {
-				if(my_sq[i] == from) {
-					my_sq[i] = to;
-					//promotion
-					if(m_promote(move))
-						my_pic[i] = m_promote(move);
-					break;
-				}
-			}
-			
-			//recursive call
-			score = -get_score(-beta,-alpha,player,my_pic,my_sq);
-
-			undo_move(move);
-
-			//update alpha
-			if(score > alpha) { 
-				alpha = score;
-				if(score >= beta) {
-					return beta;
-				}
-			}
-		}
-
-		//mate/stalemate?
-		if(legal_moves == 0) {
-			if(attacks(opponent,plist[COMBINE(player,king)]->sq))
-				return LOSS;
-			else
-				return DRAW;
-		}
-
-		return alpha;
+		return get_children_score(alpha,beta,side,piece,square,false);
 	} else {
         return DONT_KNOW;
 	}
@@ -622,7 +662,7 @@ int probe_egbb_xxx(int player,int* piece,int* square) {
 
 	PSEARCHER psearcher;
 	l_lock(searcher_lock);
-	for(int i = 0;i < 8;i++) {
+	for(int i = 0;i < MAX_CPUS;i++) {
 		if(!searchers[i].used) {
 			psearcher = &searchers[i];
 			psearcher->used = 1;
@@ -630,7 +670,8 @@ int probe_egbb_xxx(int player,int* piece,int* square) {
 		}
 	}
 	l_unlock(searcher_lock);
-	
+
+	/*get score*/
 	score = psearcher->get_score(
 		      LOSS,WIN,
 		      player,piece,square);
@@ -727,6 +768,40 @@ DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
 	/*player*/
 	if((pfen = strchr(col_name,*p)) != 0)
 		player = ((pfen - col_name) >= 2);
+	p++;
+	p++;
 
+	/*castling rights*/
+	int castle = 0;
+	if(*p == '-') {
+		p++;
+	} else {
+		while((pfen = strchr(cas_name,*p)) != 0) {
+			castle |= (1 << (pfen - cas_name));
+			p++;
+		}
+	}
+	/*epsquare*/
+	int epsquare;
+	p++;
+	if(*p == '-') {
+		epsquare = 0;
+		p++;
+	} else {
+		epsquare = int(strchr(file_name,*p) - file_name);
+		p++;
+		epsquare += 16 * int(strchr(rank_name,*p) - rank_name);
+		p++;
+	}
+	square[index] = epsquare;
+
+	/*fifty & hply*/
+	int fifty,move_number;
+	p++;
+	if(*p) sscanf(p,"%d %d",&fifty,&move_number);
+	else {
+		fifty = 0;
+	}
+	
 	return probe_egbb_xxx(player,piece,square);
 }

@@ -86,7 +86,8 @@ enum RESULTS{
 
 #define MAX_STR            256
 #define MAX_MOVES          256
-#define MAX_PLY             70
+#define MAX_PLY              8
+#define MAX_CPUS            64
 
 /*square*/
 #define file(x)          ((x) &  7)
@@ -199,11 +200,13 @@ typedef struct SEARCHER{
 	void  do_move(const int&);
     void  undo_move(const int&);
 	void  gen_all();
-	void init_data();
 	void  set_pos(
 		int side, int* piece,int* square);
+	void  clear_pos(int* piece,int* square);
 	int get_score(int alpha,int beta,
 		int side, int* piece,int* square);
+	int get_children_score(int alpha,int beta,
+		int side, int* piece,int* square, bool onlyEp);
 	void get_index(MYINT& pos_index,UBMP32& tab_index,
 		int side, int* piece,int* square);
 } *PSEARCHER;
@@ -259,7 +262,9 @@ extern void init_indices();
 
 const char piece_name[] = "_KQRBNPkqrbnp_";
 const char rank_name[] = "12345678";
+const char file_name[] = "abcdefgh";
 const char col_name[] = "WwBb";
+const char cas_name[] = "KQkq";
 
 extern const UBMP8* const _sqatt_pieces;
 extern const BMP8* const _sqatt_step;
