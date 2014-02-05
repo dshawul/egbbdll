@@ -15,7 +15,6 @@ LRU_CACHE::LRU_CACHE() {
 	lru_prev = 0;
 	l_create(lock);
 }
-
 void LRU_CACHE::alloc(UBMP32 tsize) {
 	size  = tsize / sizeof(CACHE);
 	cache = new CACHE[size];
@@ -23,6 +22,12 @@ void LRU_CACHE::alloc(UBMP32 tsize) {
 	lru_head = 0;
 	lru_tail = 0;
 	l_create(lock_lru);
+}
+void LRU_CACHE::free() {
+	if(cache) {
+		delete[] cache;
+		cache = 0;
+	}
 }
 
 /*

@@ -83,6 +83,10 @@ void EGBB::open(int egbb_state) {
 
 	is_loaded = true;
 }
+EGBB::~EGBB() {
+	if(table)
+		delete[] table;
+}
 /*
 get score of indexed position
 */
@@ -185,6 +189,15 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 /*
 Open EGBB files and allocate cache
 */
+void CDECL unload_egbb() {
+	LRU_CACHE::free();
+	for(map<int, EGBB*>::iterator it = egbbs.begin(); 
+		it != egbbs.end(); ++it) {
+		if(it->second)
+			delete it->second;
+	}
+	fflush(stdout);
+}
 void load_egbb_xxx(char* path,int cache_size,int load_options) {
 	EGBB* pegbb[2];
 	ENUMERATOR* penum;
@@ -215,6 +228,8 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 
 	printf("Loading egbbs....");
 	fflush(stdout);
+
+	atexit(unload_egbb);
 
 	/*pieces*/
 	piece[0] = wking;
@@ -805,3 +820,4 @@ DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
 	
 	return probe_egbb_xxx(player,piece,square);
 }
+

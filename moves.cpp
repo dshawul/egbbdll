@@ -455,9 +455,8 @@ void SEARCHER::gen_all() {
 SEARCHER::SEARCHER() : board(&temp_board[48])
 {
 	int sq;
-	for (sq = 0;sq < 128; sq++) {
+	for(sq = 0;sq < 128; sq++)
 		list[sq] = new LIST;
-	}
 	for(sq = 0;sq < 48;sq++)
 		temp_board[sq] = elephant;
     for(sq = 176;sq < 224;sq++)
@@ -483,6 +482,11 @@ SEARCHER::SEARCHER() : board(&temp_board[48])
 			list[sq]->next = 0;
 		}
 	}
+}
+/*Distructor*/
+SEARCHER::~SEARCHER() {
+	for(int sq = 0;sq < 128; sq++)
+		delete list[sq];
 }
 /*clear squares*/
 void SEARCHER::clear_pos(int* piece,int* square) {

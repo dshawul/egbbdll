@@ -192,6 +192,7 @@ typedef struct SEARCHER{
 	UBMP8 temp_block[BLOCK_SIZE];
 	
 	SEARCHER();
+	~SEARCHER();
 	int   blocked(int,int) const;
 	int   attacks(int,int) const;
 	void  pcAdd(int,int);
@@ -344,13 +345,13 @@ public:
 	LOCK lock;
 	LRU_CACHE LRUcache;
 	ENUMERATOR enumerator;
-	
 	EGBB() {
 		is_loaded = false;
 		use_search = false;
+		table = 0;
 		l_create(lock);
 	}
-
+	~EGBB();
 	static char path[256];
 	void open(int egbb_state);
 	int get_score(MYINT,PSEARCHER);

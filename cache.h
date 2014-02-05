@@ -50,6 +50,7 @@ public:
 	void insert_head(CACHE*);
 	void bring_to_front();
 	static void alloc(UBMP32);
+	static void free();
 };
 
 #endif

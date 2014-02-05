@@ -140,6 +140,7 @@ public:
 	HUFFMAN huffman_len;
 	HUFFMAN huffman_pos;
     COMP_INFO();
+	~COMP_INFO();
 public:
 	bool open(FILE*);
 	void compress(FILE*,FILE*);
