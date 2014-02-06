@@ -273,6 +273,7 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 			}
 		}
 	}
+	state = COMP_IN_DISK;
 	/*6 piece*/
 	piece[6] = 0;
 	for(piece1 = wqueen; piece1 <= wpawn; piece1++) {

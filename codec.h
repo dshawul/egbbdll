@@ -148,7 +148,6 @@ public:
 	void collect_frequency(UBMP8*,UBMP32);
 	int encode(UBMP8*,UBMP8*,UBMP32);
 	int decode(UBMP8*,UBMP8*,UBMP32);
-	UBMP64 read_bytes(int);
 };
 
 #endif
