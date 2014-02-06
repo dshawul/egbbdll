@@ -36,8 +36,6 @@ int EGBB::GetIndex(ENUMERATOR* penum) {
 Open EGBB
 */
 void EGBB::open(int egbb_state) {
-    UBMP32 i;
-	
     //load file according to egbb_state	
 	state = egbb_state;
 	is_loaded = false;
@@ -64,8 +62,7 @@ void EGBB::open(int egbb_state) {
 		//load in ram
 		if(state == DECOMP_IN_RAM) {
 			table = new UBMP8[TB_SIZE];
-			for(i = 0;i < TB_SIZE;i++)
-				table[i] = fgetc(pf);
+			fread(table,1,TB_SIZE,pf);
 		}
 	//compresed in ram/disk
 	} else {   
@@ -74,10 +71,7 @@ void EGBB::open(int egbb_state) {
 		//compressed files in RAM
 		if(state == COMP_IN_RAM) {
 			table = new UBMP8[cmpsize];
-			
-			for(i = 0;i < cmpsize;i++) {
-				table[i] = fgetc(pf);
-			}
+			fread(table,cmpsize,1,pf);
 		}
 	}
 
@@ -332,9 +326,7 @@ DLLExport void CDECL load_egbb_into_ram(int side,int* piece) {
 	EGBB* pegbb = egbbs[EGBB::GetIndex(&myenum)];
 	if(pegbb->state != COMP_IN_RAM) {
 		pegbb->table = new UBMP8[pegbb->cmpsize];
-		for(UBMP32 i = 0;i < pegbb->cmpsize;i++) {
-			pegbb->table[i] = fgetc(pegbb->pf);
-		}
+		fread(pegbb->table,1,pegbb->cmpsize,pegbb->pf);
 		pegbb->state = COMP_IN_RAM;
 	}
 }
