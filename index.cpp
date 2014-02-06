@@ -637,27 +637,4 @@ void ENUMERATOR::check_flip() {
 	}
 
 }
-/*
-Get index
-*/
-void SEARCHER::get_index(MYINT& pos_index,UBMP32& tab_index,
-			   int player, int* piece, int* square
-			   ) {
-	ENUMERATOR local_enum,*penum;
-	register int i;
-	local_enum.clear();
-	local_enum.player = player;
-    for(i = 0;i < MAX_PIECES && piece[i];i++)
-		local_enum.add(piece[i],square[i]);
-	local_enum.check_flip();
-	tab_index = EGBB::GetIndex(&local_enum);
-	if(!egbbs[tab_index]) return;
-	penum = &egbbs[tab_index]->enumerator;
-	for(i = 0;i < local_enum.n_piece;i++) {
-		local_enum.divisor[i] = penum->divisor[i];
-		local_enum.index[i] = penum->index[i];
-		local_enum.king_loc = penum->king_loc;
-		local_enum.pawn_loc = penum->pawn_loc;
-	}
-	local_enum.get_index(pos_index);
-}
+

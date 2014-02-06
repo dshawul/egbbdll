@@ -19,7 +19,7 @@ static LOCK searcher_lock;
 EGBB
 */
 char EGBB::path[256];
-map<int,EGBB*> egbbs;
+map<int,EGBB*> EGBB::egbbs;
 
 int EGBB::GetIndex(ENUMERATOR* penum) {
 	penum->sort(0);
@@ -78,8 +78,7 @@ void EGBB::open(int egbb_state) {
 	is_loaded = true;
 }
 EGBB::~EGBB() {
-	if(table)
-		delete[] table;
+	delete[] table;
 }
 /*
 get score of indexed position
@@ -152,13 +151,37 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 
     return score;
 }
+/*
+Get index
+*/
+void SEARCHER::get_index(MYINT& pos_index,UBMP32& tab_index,
+			   int player, int* piece, int* square
+			   ) {
+	ENUMERATOR local_enum,*penum;
+	register int i;
+	local_enum.clear();
+	local_enum.player = player;
+    for(i = 0;i < MAX_PIECES && piece[i];i++)
+		local_enum.add(piece[i],square[i]);
+	local_enum.check_flip();
+	tab_index = EGBB::GetIndex(&local_enum);
+	if(!EGBB::egbbs[tab_index]) return;
+	penum = &EGBB::egbbs[tab_index]->enumerator;
+	for(i = 0;i < local_enum.n_piece;i++) {
+		local_enum.divisor[i] = penum->divisor[i];
+		local_enum.index[i] = penum->index[i];
+		local_enum.king_loc = penum->king_loc;
+		local_enum.pawn_loc = penum->pawn_loc;
+	}
+	local_enum.get_index(pos_index);
+}
 /*ADD files*/
 #define ADD() {                                   \
 	pegbb[side] = new EGBB;                       \
 	penum = &pegbb[side]->enumerator;             \
 	penum->add(side,piece);                       \
 	tab_index[side] = EGBB::GetIndex(penum);      \
-	egbbs[tab_index[side]] = pegbb[side];         \
+	EGBB::egbbs[tab_index[side]] = pegbb[side];   \
 	penum->sort(1);                               \
 	penum->init();                                \
 	pegbb[side]->open(state);                     \
@@ -176,8 +199,8 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 	} else {                                      \
 		delete pegbb[0];						  \
 		delete pegbb[1];                          \
-		egbbs[tab_index[0]] = 0;                  \
-		egbbs[tab_index[1]] = 0;                  \
+		EGBB::egbbs[tab_index[0]] = 0;            \
+		EGBB::egbbs[tab_index[1]] = 0;            \
 	}                                             \
 };
 /*
@@ -185,12 +208,11 @@ Open EGBB files and allocate cache
 */
 void CDECL unload_egbb() {
 	LRU_CACHE::free();
-	for(map<int, EGBB*>::iterator it = egbbs.begin(); 
-		it != egbbs.end(); ++it) {
-		if(it->second)
-			delete it->second;
+	for(map<int, EGBB*>::iterator it = EGBB::egbbs.begin(); 
+		it != EGBB::egbbs.end(); ++it) {
+		delete it->second;
 	}
-	fflush(stdout);
+	EGBB::egbbs.clear();
 }
 void load_egbb_xxx(char* path,int cache_size,int load_options) {
 	EGBB* pegbb[2];
@@ -216,14 +238,14 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 	printf("EgbbProbe 4.1 by Daniel Shawul\n");
 	fflush(stdout);
 
+	atexit(unload_egbb);
+
 	init_indices();
 	LRU_CACHE::alloc( cache_size );
     l_create(searcher_lock);
 
 	printf("Loading egbbs....");
 	fflush(stdout);
-
-	atexit(unload_egbb);
 
 	/*pieces*/
 	piece[0] = wking;
@@ -306,6 +328,7 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 			}
 		}
 	}
+
 	/*7 men*/
 	printf("\r%d egbbs loaded !      \n",total_loaded);
 	fflush(stdout);
@@ -324,7 +347,7 @@ DLLExport void CDECL open_egbb(int* piece) {
 DLLExport void CDECL load_egbb_into_ram(int side,int* piece) {
 	ENUMERATOR myenum;
 	myenum.add(side,piece);
-	EGBB* pegbb = egbbs[EGBB::GetIndex(&myenum)];
+	EGBB* pegbb = EGBB::egbbs[EGBB::GetIndex(&myenum)];
 	if(pegbb->state != COMP_IN_RAM) {
 		pegbb->table = new UBMP8[pegbb->cmpsize];
 		fread(pegbb->table,1,pegbb->cmpsize,pegbb->pf);
@@ -335,7 +358,7 @@ DLLExport void CDECL load_egbb_into_ram(int side,int* piece) {
 DLLExport void CDECL unload_egbb_from_ram(int side,int* piece) {
 	ENUMERATOR myenum;
 	myenum.add(side,piece);
-	EGBB* pegbb = egbbs[EGBB::GetIndex(&myenum)];
+	EGBB* pegbb = EGBB::egbbs[EGBB::GetIndex(&myenum)];
     if(pegbb->state == COMP_IN_RAM) {
 		pegbb->state = COMP_IN_DISK;
 		delete[] (pegbb->table);
@@ -468,7 +491,7 @@ int SEARCHER::get_score(
 	get_index(pos_index,tab_index,
 		      side,piece,square);
 
-	pegbb = egbbs[tab_index];
+	pegbb = EGBB::egbbs[tab_index];
 	if(!pegbb)
 		return DONT_KNOW;
 
@@ -813,4 +836,3 @@ DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
 	
 	return probe_egbb_xxx(player,piece,square);
 }
-

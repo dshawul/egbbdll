@@ -353,12 +353,12 @@ public:
 	}
 	~EGBB();
 	static char path[256];
+	static map<int,EGBB*> egbbs;
 	void open(int egbb_state);
 	int get_score(MYINT,PSEARCHER);
 
 	static int GetIndex(ENUMERATOR* penum);
 };
-extern map<int,EGBB*> egbbs;
 /*
 End
 */

@@ -29,6 +29,7 @@ const int base_length[] = {
 };
 
 COMP_INFO::COMP_INFO() {
+	index_table = 0;
 	huffman.cann = 0;
 	huffman_pos.cann = 0;
 	huffman.MAX_LEAFS = LITERAL_CODES;
@@ -38,10 +39,7 @@ COMP_INFO::COMP_INFO() {
 }
 
 COMP_INFO::~COMP_INFO() {
-	if(huffman.cann)
-		delete[] huffman.cann;
-	if(huffman_pos.cann) 
-		delete[] huffman_pos.cann;
-	if(index_table) 
-		delete[] index_table;
+	delete[] huffman.cann;
+	delete[] huffman_pos.cann;
+	delete[] index_table;
 }
