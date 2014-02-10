@@ -268,6 +268,13 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 	for(piece1 = wqueen; piece1 <= wpawn; piece1++) {
 		for(piece2 = piece1; piece2 <= wpawn; piece2++) {
 			for(piece3 = bqueen; piece3 <= bpawn; piece3++) {
+				if(load_options == SMART_LOAD) {
+					if(piece2 == wpawn && 
+						(PIECE(piece1) == PIECE(piece3) || piece1 == wpawn))
+						state = state1;
+					else 
+						state = state2;
+				}
 				for(side = white; side <= black;side++) ADD();
 				PRESENCE();
 			}
