@@ -51,28 +51,19 @@ void EGBB::open(int egbb_state) {
 	}
 
 	//Decompresed in ram/disk
-	if(!is_comp(state)) {  
+	if(is_comp(state) && !COMP_INFO::open(pf))
+		return;
 
-		//get size of file and allocate buffers
+	//compressed files in RAM
+	if(!is_in_disk(state)) {
 		UBMP32 TB_SIZE;
+		int loc = ftell(pf);
 		fseek(pf,0,SEEK_END);
 		TB_SIZE = ftell(pf);
-		fseek(pf,0,SEEK_SET);
-		
-		//load in ram
-		if(state == DECOMP_IN_RAM) {
-			table = new UBMP8[TB_SIZE];
-			fread(table,1,TB_SIZE,pf);
-		}
-	//compresed in ram/disk
-	} else {   
-		if(!COMP_INFO::open(pf))
-			return;
-		//compressed files in RAM
-		if(state == COMP_IN_RAM) {
-			table = new UBMP8[cmpsize];
-			fread(table,cmpsize,1,pf);
-		}
+		fseek(pf,loc,SEEK_SET);
+
+		table = new UBMP8[TB_SIZE];
+		fread(table,TB_SIZE,1,pf);
 	}
 
 	is_loaded = true;
@@ -106,10 +97,11 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 			fseek(pf,block_start,SEEK_SET);
 			fread(&psearcher->info.block,BLOCK_SIZE,1,pf);
 			l_unlock(lock);
+
 			value = psearcher->info.block[probe_index];
             LRUcache.add(&psearcher->info);
 		}
-	} else if(state == COMP_IN_RAM) {
+	} else if(is_comp(state)) {
 		UBMP32 block_size;
 		UBMP32 n_blk = UBMP32(q / BLOCK_SIZE);
 		UBMP32 probe_index = UBMP32(q - (n_blk * BLOCK_SIZE));
@@ -119,29 +111,15 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 		if(LRUcache.get(psearcher->info.start_index,probe_index,value) == CACHE_HIT) {
 		} else {
 			block_size = index_table[n_blk + 1] - index_table[n_blk];
-			block_size = decode(&table[psearcher->info.start_index],psearcher->info.block,block_size);
-			value = psearcher->info.block[probe_index];
-			LRUcache.add(&psearcher->info);
-		}
-	}  else if(state == COMP_IN_DISK) {
-		UBMP32 block_size;
-		UBMP32 n_blk = UBMP32(q / BLOCK_SIZE);
-		UBMP32 probe_index = UBMP32(q - (n_blk * BLOCK_SIZE));
-
-		psearcher->info.start_index = index_table[n_blk];
-		
-		if(LRUcache.get(psearcher->info.start_index,probe_index,value) == CACHE_HIT) {
-		} else {
-			
-			block_size = index_table[n_blk + 1] - index_table[n_blk];
-
-			l_lock(lock);
-			fseek(pf,read_start + psearcher->info.start_index,SEEK_SET);
-			fread(psearcher->temp_block,block_size,1,pf);
-			l_unlock(lock);
-
-        	block_size = decode(psearcher->temp_block,psearcher->info.block,block_size);
-
+			if(state == COMP_IN_RAM) {
+				block_size = decode(&table[psearcher->info.start_index],psearcher->info.block,block_size);
+			} else {
+				l_lock(lock);
+				fseek(pf,read_start + psearcher->info.start_index,SEEK_SET);
+				fread(psearcher->temp_block,block_size,1,pf);
+				l_unlock(lock);
+				block_size = decode(psearcher->temp_block,psearcher->info.block,block_size);
+			}
 			value = psearcher->info.block[probe_index];
 			LRUcache.add(&psearcher->info);
 		}
