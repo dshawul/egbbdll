@@ -4,17 +4,18 @@
 /*
 globals
 */
-static const int WIN_SCORE  =  5000;
-
 enum {
-	DECOMP_IN_RAM,DECOMP_IN_DISK,COMP_IN_RAM,COMP_IN_DISK
+	DECOMP_IN_RAM,DECOMP_IN_DISK,COMP_IN_RAM,COMP_IN_DISK,COMPLZ_IN_RAM,COMPLZ_IN_DISK
 };
+
 #define is_in_disk(x)    ((x) & 1)
 #define is_comp(x)       ((x) & 2)
+#define is_complz(x)     ((x) & 4)
+
+#define WIN_SCORE        5000
 
 static SEARCHER searchers[MAX_CPUS];
 static LOCK searcher_lock;
-
 /*
 EGBB
 */
@@ -40,18 +41,23 @@ void EGBB::open(int egbb_state) {
 	state = egbb_state;
 	is_loaded = false;
 
+	//file name
 	strcpy(name,path);
 	strcat(name,enumerator.name);
 	if(is_comp(state))
 		strcat(name,".cmp");
-
+	else if(is_complz(state))
+		strcat(name,".lz");
+	
+	//open file
 	pf = fopen(name,"rb");
-	if(!pf) {
+	if(!pf)
 		return;
-	}
 
-	//Decompresed in ram/disk
-	if(is_comp(state) && !COMP_INFO::open(pf))
+	//open compressed file
+	if(is_comp(state) && !COMP_INFO::open(pf,0))
+		return;
+	if(is_complz(state) && !COMP_INFO::open(pf,1))
 		return;
 
 	//compressed files in RAM
@@ -61,7 +67,6 @@ void EGBB::open(int egbb_state) {
 		fseek(pf,0,SEEK_END);
 		TB_SIZE = ftell(pf);
 		fseek(pf,loc,SEEK_SET);
-
 		table = new UBMP8[TB_SIZE];
 		fread(table,TB_SIZE,1,pf);
 	}
@@ -101,7 +106,7 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 			value = psearcher->info.block[probe_index];
             LRUcache.add(&psearcher->info);
 		}
-	} else if(is_comp(state)) {
+	} else {
 		UBMP32 block_size;
 		UBMP32 n_blk = UBMP32(q / BLOCK_SIZE);
 		UBMP32 probe_index = UBMP32(q - (n_blk * BLOCK_SIZE));
@@ -113,12 +118,17 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 			block_size = index_table[n_blk + 1] - index_table[n_blk];
 			if(state == COMP_IN_RAM) {
 				block_size = decode(&table[psearcher->info.start_index],psearcher->info.block,block_size);
+			} else if(state == COMPLZ_IN_RAM) {
+				block_size = decode_lz(&table[psearcher->info.start_index],psearcher->info.block,block_size);
 			} else {
 				l_lock(lock);
 				fseek(pf,read_start + psearcher->info.start_index,SEEK_SET);
 				fread(psearcher->temp_block,block_size,1,pf);
 				l_unlock(lock);
-				block_size = decode(psearcher->temp_block,psearcher->info.block,block_size);
+				if(state == COMP_IN_DISK)
+					block_size = decode(psearcher->temp_block,psearcher->info.block,block_size);
+				else if(state == COMPLZ_IN_DISK)
+					block_size = decode_lz(psearcher->temp_block,psearcher->info.block,block_size);
 			}
 			value = psearcher->info.block[probe_index];
 			LRUcache.add(&psearcher->info);
@@ -170,6 +180,7 @@ void SEARCHER::get_index(MYINT& pos_index,UBMP32& tab_index,
 	if(pegbb[0]->is_loaded) {                     \
 		if(!pegbb[1]->is_loaded)                  \
 			pegbb[1]->use_search = true;          \
+		else total_loaded++;					  \
 		total_loaded++;							  \
 	} else if(pegbb[1]->is_loaded) {              \
 		pegbb[0]->use_search = true;              \
@@ -210,6 +221,9 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 	} else if(load_options == LOAD_5MEN) {
 		state1 = COMP_IN_RAM;
 		state2 = COMP_IN_RAM;
+	} else if(load_options == LOAD_5MEN_LZ) {
+		state1 = COMPLZ_IN_RAM;
+		state2 = COMPLZ_IN_RAM;
 	}
 	strcpy(EGBB::path,path);
 
@@ -534,23 +548,21 @@ static const int  kbnk_pcsq[64] = {
  * Evaluate for progress
  */
 static int eval(int player,int* piece,int* square,int wdl_score) {
-	register int i,score,all_c,p_dist,material,ktable,w_king,b_king;
+	register int i,all_c,p_dist,material,ktable,kdist,w_king,b_king,pic;
 
-	//king locations
-	for(i = 0;i < MAX_PIECES && piece[i];i++) {
-		if(piece[i] == wking) w_king = square[i];
-		if(piece[i] == bking) b_king = square[i];
-	}
-	all_c = i;
-	
-	//material
+	//king locations, material
 	material = 0;
-	for(i = 0;i < all_c;i++) material += piece_cv[piece[i]];
+	for(i = 0;i < MAX_PIECES && (pic = piece[i]);i++) {
+		if(pic == wking) w_king = square[i];
+		else if(pic == bking) b_king = square[i];
+		material += piece_cv[pic];
+	}
 	if(player == black) material = -material;
+	all_c = i;
+	kdist = distance(SQ6488(w_king),SQ6488(b_king));
 	
 	//passed pawn
 	int prom_score,wp_prom = 0,bp_prom = 0,wp_dist = 0,bp_dist = 0;
-	
 	for(i = 0;i < all_c;i++) {
 		if(PIECE(piece[i]) == pawn) {
 			if(COLOR(piece[i]) == white) wp_prom += rank64(square[i]);
@@ -564,18 +576,17 @@ static int eval(int player,int* piece,int* square,int wdl_score) {
 	prom_score = wp_prom - bp_prom;
 	if(player == black) prom_score = -prom_score;
 	
-	
 	//king square table for kbnk and others
-	int piece1 = piece[2],piece2 = piece[3];
-	int square1 = square[2],square2 = square[3];
-	if(all_c == 4 
-		&& (((piece1 == wbishop && piece2 == wknight) ||
-			     (piece1 == wknight && piece2 == wbishop))  
-				 ||
-				 ((piece1 == bbishop && piece2 == bknight) ||
-				 (piece1 == bknight && piece2 == bbishop)))
-				 ) {
-		
+	if(all_c == 4 &&
+		(((piece[2] == wbishop && piece[3] == wknight) ||
+		  (piece[2] == wknight && piece[3] == wbishop))  
+		||
+		((piece[2] == bbishop && piece[3] == bknight) ||
+		 (piece[2] == bknight && piece[3] == bbishop)))
+		) {
+
+		int piece1 = piece[2],square1 = square[2],square2 = square[3];
+
 		//get the king's & bishop's square
 		int b_sq,loser_ksq,winner_ksq;
 		if(COLOR(piece1) == white) {
@@ -604,11 +615,10 @@ static int eval(int player,int* piece,int* square,int wdl_score) {
 		
 		//score
 		if(wdl_score == WIN) {
-			ktable = king_pcsq[winner_ksq] - kbnk_pcsq[loser_ksq];
+			ktable = + king_pcsq[winner_ksq] - 2 * kbnk_pcsq[loser_ksq];
 		} else {
-			ktable = -king_pcsq[winner_ksq] + kbnk_pcsq[loser_ksq];
+			ktable = - king_pcsq[winner_ksq] + 2 * kbnk_pcsq[loser_ksq];
 		}
-		
 	} else {
 		if(player == white) {
 			if(wdl_score == WIN) {
@@ -626,47 +636,17 @@ static int eval(int player,int* piece,int* square,int wdl_score) {
 	}
 	
 	//combine score
-	if(player == white) {
-		if(wdl_score == WIN) {
-			score = 
-				+ WIN_SCORE
-				+ (5 - all_c) * 200 
-				- distance(SQ6488(w_king),SQ6488(b_king)) * 2
-				+ ktable * 5
-				+ material * 50
-				+ prom_score * 20
-				- p_dist * 7;
-		} else {
-			score = 
-				- WIN_SCORE
-				- (5 - all_c) * 200
-				+ distance(SQ6488(w_king),SQ6488(b_king)) * 2
-				+ ktable * 5
-				+ material * 50
-				+ prom_score * 20
-				- p_dist * 7;
-		}
-	} else {
-		if(wdl_score == WIN) {
-			score = 
-				+ WIN_SCORE
-				+ (5 - all_c) * 200
-				- distance(SQ6488(w_king),SQ6488(b_king)) * 2
-				+ ktable * 5
-				+ material * 50
-				+ prom_score * 20
-				- p_dist * 7;
-		} else {
-			score = 
-				- WIN_SCORE
-				- (5 - all_c) * 200
-				+ distance(SQ6488(w_king),SQ6488(b_king)) * 2
-				+ ktable * 5
-				+ material * 50
-				+ prom_score * 20
-				- p_dist * 7;
-		}
-	}
+	int score = 
+		+ WIN_SCORE
+		+ (5 - all_c) * 200 
+		- kdist * 2;
+	if(wdl_score == LOSS)
+		score = -score;
+	score +=
+		+ ktable * 5
+		+ material * 50
+		+ prom_score * 20
+		- p_dist * 7;
 	return score;
 }
 /*
@@ -819,5 +799,6 @@ DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
 		fifty = 0;
 	}
 	
+	/*get egbb score*/
 	return probe_egbb_xxx(player,piece,square);
 }
