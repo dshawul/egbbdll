@@ -3,6 +3,7 @@
 
 #define PARALLEL
 #include "my_types.h"
+#include <unordered_map>
 
 /*
 data to be cached
@@ -11,7 +12,7 @@ data to be cached
 
 struct INFO {
 	UBMP8  block[INFO_SIZE];
-	UBMP32 start_index;
+	UBMP64 key;
 };
 /*
 cache class
@@ -33,22 +34,15 @@ class LRU_CACHE {
 public:
 	CACHE* head;
 	CACHE* tail;
-	LRU_CACHE* lru_prev;
-	LRU_CACHE* lru_next;
 	LOCK lock;
 	static CACHE* cache;
-	static LRU_CACHE* lru_head;
-	static LRU_CACHE* lru_tail;
-	static LOCK lock_lru;
 	static UBMP32 size;
 	static UBMP32 used;
-
+	static std::unordered_map<UBMP64,CACHE*> cacheMap;
 public:
 	LRU_CACHE();
-	void add(INFO* info);
-	int  get(UBMP32 start_index,UBMP32 probe_index,UBMP8& value);
-	void insert_head(CACHE*);
-	void bring_to_front();
+	void add(UBMP64,INFO* info);
+	int  get(UBMP64,UBMP32 probe_index,UBMP8& value);
 	static void alloc(UBMP32);
 	static void free();
 };

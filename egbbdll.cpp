@@ -20,7 +20,8 @@ static LOCK searcher_lock;
 EGBB
 */
 char EGBB::path[256];
-map<int,EGBB*> EGBB::egbbs;
+std::unordered_map<int,EGBB*> EGBB::egbbs;
+LRU_CACHE EGBB::LRUcache;
 
 int EGBB::GetIndex(ENUMERATOR* penum) {
 	penum->sort(0);
@@ -93,10 +94,10 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 	} else if(state == DECOMP_IN_DISK) {
 		UBMP32 block_start = UBMP32((q / BLOCK_SIZE) * BLOCK_SIZE);
 		UBMP32 probe_index = UBMP32(q - block_start);
+		UBMP64 key = (UBMP64(block_start) << 32) | id;
+		psearcher->info.key = key;
 		
-		psearcher->info.start_index = block_start;
-		
-        if(LRUcache.get(psearcher->info.start_index,probe_index,value) == CACHE_HIT) {
+        if(LRUcache.get(key,probe_index,value) == CACHE_HIT) {
 		} else {
 			l_lock(lock);
 			fseek(pf,block_start,SEEK_SET);
@@ -104,25 +105,26 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 			l_unlock(lock);
 
 			value = psearcher->info.block[probe_index];
-            LRUcache.add(&psearcher->info);
+            LRUcache.add(key,&psearcher->info);
 		}
 	} else {
 		UBMP32 block_size;
 		UBMP32 n_blk = UBMP32(q / BLOCK_SIZE);
 		UBMP32 probe_index = UBMP32(q - (n_blk * BLOCK_SIZE));
+		UBMP32 block_start = index_table[n_blk];
+		UBMP64 key = (UBMP64(block_start) << 32) | id;
+		psearcher->info.key = key;
 		
-		psearcher->info.start_index = index_table[n_blk];
-		
-		if(LRUcache.get(psearcher->info.start_index,probe_index,value) == CACHE_HIT) {
+		if(LRUcache.get(key,probe_index,value) == CACHE_HIT) {
 		} else {
 			block_size = index_table[n_blk + 1] - index_table[n_blk];
 			if(state == COMP_IN_RAM) {
-				block_size = decode(&table[psearcher->info.start_index],psearcher->info.block,block_size);
+				block_size = decode(&table[block_start],psearcher->info.block,block_size);
 			} else if(state == COMPLZ_IN_RAM) {
-				block_size = decode_lz(&table[psearcher->info.start_index],psearcher->info.block,block_size);
+				block_size = decode_lz(&table[block_start],psearcher->info.block,block_size);
 			} else {
 				l_lock(lock);
-				fseek(pf,read_start + psearcher->info.start_index,SEEK_SET);
+				fseek(pf,read_start + block_start,SEEK_SET);
 				fread(psearcher->temp_block,block_size,1,pf);
 				l_unlock(lock);
 				if(state == COMP_IN_DISK)
@@ -131,7 +133,7 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 					block_size = decode_lz(psearcher->temp_block,psearcher->info.block,block_size);
 			}
 			value = psearcher->info.block[probe_index];
-			LRUcache.add(&psearcher->info);
+			LRUcache.add(key,&psearcher->info);
 		}
 	}
 
@@ -169,6 +171,7 @@ void SEARCHER::get_index(MYINT& pos_index,UBMP32& tab_index,
 	penum = &pegbb[side]->enumerator;             \
 	penum->add(side,piece);                       \
 	tab_index[side] = EGBB::GetIndex(penum);      \
+	pegbb[side]->id = tab_index[side];			  \
 	EGBB::egbbs[tab_index[side]] = pegbb[side];   \
 	penum->sort(1);                               \
 	penum->init();                                \
@@ -197,7 +200,7 @@ Open EGBB files and allocate cache
 */
 void CDECL unload_egbb() {
 	LRU_CACHE::free();
-	for(map<int, EGBB*>::iterator it = EGBB::egbbs.begin(); 
+	for(unordered_map<int, EGBB*>::iterator it = EGBB::egbbs.begin(); 
 		it != EGBB::egbbs.end(); ++it) {
 		delete it->second;
 	}

@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <map>
+#include <unordered_map>
 
 #define PARALLEL
 #include "my_types.h"
@@ -337,13 +337,13 @@ EGBB
 */
 class EGBB : public COMP_INFO {
 public:
+	UBMP32 id;
 	char name[256];
 	UBMP8*  table;
 	int  state;
 	bool use_search;
 	bool is_loaded;
 	LOCK lock;
-	LRU_CACHE LRUcache;
 	ENUMERATOR enumerator;
 	EGBB() {
 		is_loaded = false;
@@ -353,10 +353,11 @@ public:
 	}
 	~EGBB();
 	static char path[256];
-	static map<int,EGBB*> egbbs;
+	static std::unordered_map<int,EGBB*> egbbs;
+	static LRU_CACHE LRUcache;
+
 	void open(int egbb_state);
 	int get_score(MYINT,PSEARCHER);
-
 	static int GetIndex(ENUMERATOR* penum);
 };
 /*
