@@ -14,22 +14,17 @@ enum {LOAD_NONE,LOAD_4MEN,SMART_LOAD,LOAD_5MEN,LOAD_5MEN_LZ};
      #define DLLExport extern "C"
 #endif
 
-#ifdef _MSC_VER
-#   define CDECL __cdecl
-#else
-#   define CDECL
-#endif
 /*4 men*/
 DLLExport int  CDECL probe_egbb(int player, int w_king, int b_king,
-			   int piece1 = _EMPTY, int square1 = 0,
-			   int piece2 = _EMPTY, int square2 = 0);
+               int piece1 = _EMPTY, int square1 = 0,
+               int piece2 = _EMPTY, int square2 = 0);
 DLLExport void CDECL load_egbb(char* path);
 /*5 men*/
 DLLExport int  CDECL probe_egbb_5men(int player, int w_king, int b_king,
-			   int piece1 = _EMPTY, int square1 = 0,
-			   int piece2 = _EMPTY, int square2 = 0,
-			   int piece3 = _EMPTY, int square3 = 0
-			   );
+               int piece1 = _EMPTY, int square1 = 0,
+               int piece2 = _EMPTY, int square2 = 0,
+               int piece3 = _EMPTY, int square3 = 0
+               );
 DLLExport void CDECL load_egbb_5men(char* path,int cache_size = 4194304,int load_options = LOAD_4MEN);
 /*X men*/
 DLLExport int  CDECL probe_egbb_fen(char* fen);
