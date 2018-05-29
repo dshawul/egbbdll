@@ -360,6 +360,10 @@ public:
     int get_score(MYINT,PSEARCHER);
     static int GetIndex(ENUMERATOR* penum);
 };
+
+/*Searchers*/
+extern SEARCHER searchers[MAX_CPUS];
+extern LOCK searcher_lock;
 /*
 End
 */

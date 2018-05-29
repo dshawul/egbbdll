@@ -14,8 +14,8 @@ enum {
 
 #define WIN_SCORE        5000
 
-static SEARCHER searchers[MAX_CPUS];
-static LOCK searcher_lock;
+SEARCHER searchers[MAX_CPUS];
+LOCK searcher_lock;
 /*
 EGBB
 */
