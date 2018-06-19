@@ -47,11 +47,6 @@ TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/proto
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/proto_text
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/protobuf-host/include
 
-#static linking
-#TF_LIB = -Wl,--whole-archive ${TF_DIR_LIB}/libtensorflow-core.a -Wl,--no-whole-archive
-#TF_LIB += $(TF_DIR_LIB)/libprotobuf.a $(TF_DIR_LIB)/nsync.a
-
-#dynamic linking
 TF_LIB = -Wl,-rpath=$(TF_DIR_LIB) 
 TF_LIB += $(TF_DIR_LIB)/libprotobuf.a
 TF_LIB += -Wl,-Bdynamic $(TF_DIR_LIB)/libtensorflow_cc.so 
