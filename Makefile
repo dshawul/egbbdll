@@ -38,13 +38,11 @@ TF_DIR_INC=$(TF_DIR)/include/tensorflow
 TF_DIR_LIB=$(TF_DIR)/lib/tensorflow_cc
 
 TF_INC =-I$(TF_DIR_INC)
-TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/host_obj
+TF_INC+=-I$(TF_DIR_INC)/bazel-genfiles
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/downloads
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/downloads/eigen
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/downloads/gemmlowp
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/downloads/nsync/public
-TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/proto
-TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/proto_text
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/protobuf-host/include
 
 TF_LIB = -Wl,-rpath=$(TF_DIR_LIB) 
