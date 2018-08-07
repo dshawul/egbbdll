@@ -4,7 +4,7 @@
 const int pawn_dir[2] = {UU,DD};
 const int col_tab[15] = {neutral,white,white,white,white,white,white,
 black,black,black,black,black,black,neutral};
-const int pic_tab[15] = {empty,king,queen,rook,bishop,knight,pawn,
+const int pic_tab[15] = {blank,king,queen,rook,bishop,knight,pawn,
 king,queen,rook,bishop,knight,pawn,elephant};
 
 /*
@@ -26,18 +26,18 @@ void SEARCHER::do_move(const int& move) {
             sq = to;
         }
         pcRemove(m_capture(move),sq);
-        board[sq] = empty;
+        board[sq] = blank;
     }
 
     /*move piece*/
     if(m_promote(move)) {
         board[to] = m_promote(move);
-        board[from] = empty;
+        board[from] = blank;
         pcAdd(m_promote(move),to);
         pcRemove(COMBINE(player,pawn),from);
     } else {
         board[to] = board[from];
-        board[from] = empty;
+        board[from] = blank;
         pcSwap(from,to);
     }
 
@@ -52,7 +52,7 @@ void SEARCHER::do_move(const int& move) {
            toc = to + RR;
         }
         board[toc] = board[fromc];
-        board[fromc] = empty;
+        board[fromc] = blank;
         pcSwap(fromc,toc);
     } 
 
@@ -106,20 +106,20 @@ void SEARCHER::undo_move(const int& move) {
            toc = to + 2*LL;
         }
         board[toc] = board[fromc];
-        board[fromc] = empty;
+        board[fromc] = blank;
         pcSwap(fromc,toc);
     } 
 
     /*unmove piece*/
     if(m_promote(move)) {
         board[from] = COMBINE(player,pawn);
-        board[to] = empty;
+        board[to] = blank;
         pcAdd(COMBINE(player,pawn),from);
         pcRemove(m_promote(move),to);
 
     } else {
         board[from] = board[to];
-        board[to] = empty;
+        board[to] = blank;
         pcSwap(to,from);
     }
 
@@ -139,14 +139,14 @@ generate all
 */
 #define NK_MOVES(dir) {                                                 \
         to = from + dir;                                                \
-        if(board[to] == empty)                                          \
+        if(board[to] == blank)                                          \
             *pmove++ = tmove | (to<<8);                                 \
         else if(COLOR(board[to]) == opponent)                           \
             *pmove++ = tmove | (to<<8) | (board[to]<<20);               \
 };
 #define BRQ_MOVES(dir) {                                                \
         to = from + dir;                                                \
-        while(board[to] == empty) {                                     \
+        while(board[to] == blank) {                                     \
             *pmove++ = tmove | (to<<8);                                 \
             to += dir;                                                  \
         }                                                               \
@@ -173,15 +173,15 @@ void SEARCHER::gen_all() {
         /*castling*/
         if((castle & WSLC_FLAG) && !attacks(black,E1)) {
             if(castle & WSC_FLAG &&
-                board[F1] == empty &&
-                board[G1] == empty &&
+                board[F1] == blank &&
+                board[G1] == blank &&
                 !attacks(black,F1) &&
                 !attacks(black,G1))
                 *pmove++ = E1 | (G1<<8) | (wking<<16) | CASTLE_FLAG;
             if(castle & WLC_FLAG &&
-                board[B1] == empty &&
-                board[C1] == empty &&
-                board[D1] == empty &&
+                board[B1] == blank &&
+                board[C1] == blank &&
+                board[D1] == blank &&
                 !attacks(black,C1) &&
                 !attacks(black,D1)) {
                 *pmove++ = E1 | (C1<<8) | (wking<<16) | CASTLE_FLAG;
@@ -282,9 +282,9 @@ void SEARCHER::gen_all() {
             }
             //noncaps
             to = from + UU;
-            if(board[to] == empty) {
+            if(board[to] == blank) {
                 if(rank(to) == RANK8) {
-                    if(board[to] == empty) {
+                    if(board[to] == blank) {
                         tmove = from | (to<<8) | (wpawn<<16);
                         *pmove++ = tmove | (wqueen<<24);
                         *pmove++ = tmove | (wknight<<24);
@@ -295,7 +295,7 @@ void SEARCHER::gen_all() {
                     *pmove++ = from | (to<<8) | (wpawn<<16);
                     if(rank(from) == RANK2) {
                         to += UU;
-                        if(board[to] == empty)
+                        if(board[to] == blank)
                             *pmove++ = from | (to<<8) | (wpawn<<16);
                     }
                 }
@@ -317,15 +317,15 @@ void SEARCHER::gen_all() {
         /*castling*/
         if((castle & BSLC_FLAG) && !attacks(white,E8)) {
             if(castle & BSC_FLAG &&
-                board[F8] == empty &&
-                board[G8] == empty &&
+                board[F8] == blank &&
+                board[G8] == blank &&
                 !attacks(white,F8) &&
                 !attacks(white,G8))
                 *pmove++ = E8 | (G8<<8) | (bking<<16) | CASTLE_FLAG;
             if(castle & BLC_FLAG &&
-                board[B8] == empty &&
-                board[C8] == empty &&
-                board[D8] == empty &&
+                board[B8] == blank &&
+                board[C8] == blank &&
+                board[D8] == blank &&
                 !attacks(white,C8) &&
                 !attacks(white,D8)) {
                 *pmove++ = E8 | (C8<<8) | (bking<<16) | CASTLE_FLAG;
@@ -428,7 +428,7 @@ void SEARCHER::gen_all() {
             }
             //noncaps
             to = from + DD;
-            if(board[to] == empty) {
+            if(board[to] == blank) {
                 if(rank(to) == RANK1) {
                     tmove = from | (to<<8) | (bpawn<<16);
                     *pmove++ = tmove | (bqueen<<24);
@@ -439,7 +439,7 @@ void SEARCHER::gen_all() {
                     *pmove++ = from | (to<<8) | (bpawn<<16);
                     if(rank(from) == RANK7) {
                         to += DD;
-                        if(board[to] == empty)
+                        if(board[to] == blank)
                             *pmove++ = from | (to<<8) | (bpawn<<16);
                     }
                 }
@@ -465,7 +465,7 @@ SEARCHER::SEARCHER() : board(&temp_board[48])
         if(sq & 0x88)
            board[sq] = elephant;
         else
-           board[sq] = empty;
+           board[sq] = blank;
     }
 
     used = 0;
@@ -494,7 +494,7 @@ void SEARCHER::clear_pos(int* piece,int* square) {
     for(i = 0;i < MAX_PIECES && piece[i];i++) {
         int sq = SQ6488(square[i]);
         pcRemove(piece[i],sq);
-        board[sq] = empty;
+        board[sq] = blank;
     }
 }
 /*set pos*/
@@ -560,7 +560,7 @@ int SEARCHER::blocked(int from, int to) const {
     register int step,sq;
     if(step = sqatt_step(to - from)) {
         sq = from + step;
-        while(board[sq] == empty && (sq != to)) sq += step;
+        while(board[sq] == blank && (sq != to)) sq += step;
         return (sq != to);
     }
     return true;

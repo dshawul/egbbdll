@@ -47,7 +47,7 @@ TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/protobuf-host/include
 
 TF_LIB = -Wl,-rpath=$(TF_DIR_LIB) 
 TF_LIB += $(TF_DIR_LIB)/libprotobuf.a
-TF_LIB += -Wl,-Bdynamic $(TF_DIR_LIB)/libtensorflow_cc.so 
+TF_LIB += $(TF_DIR_LIB)/libtensorflow_cc.so 
 
 ifeq ($(USE_TF),1)
 	LDFLAGS += $(TF_LIB)

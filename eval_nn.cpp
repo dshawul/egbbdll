@@ -1,3 +1,4 @@
+#ifdef TENSORFLOW
 #include <vector>
 
 #include "tensorflow/core/platform/env.h"
@@ -52,7 +53,7 @@ DLLExport void CDECL load_neural_network(char* path) {
     fflush(stdout);
 
 #ifdef _WIN32
-    SetEnvironmentVariable("TF_CPP_MIN_LOG_LEVEL","3");
+    SetEnvironmentVariable((LPCWSTR)"TF_CPP_MIN_LOG_LEVEL",(LPCWSTR)"3");
 #else
     setenv("TF_CPP_MIN_LOG_LEVEL","3",1);
 #endif
@@ -251,7 +252,7 @@ static const double Kfactor = -log(10.0) / 400.0;
 static inline int logit(double p) {
     if(p < 1e-15) p = 1e-15;
     else if(p > 1 - 1e-15) p = 1 - 1e-15;
-    return log((1 - p) / p) / Kfactor;
+    return int(log((1 - p) / p) / Kfactor);
 }
 
 /*
@@ -264,11 +265,11 @@ DLLExport int CDECL probe_neural_network(int player, int* piece,int* square) {
     PSEARCHER psearcher;
     int processor_id;
     l_lock(searcher_lock);
-    for(int processor_id = 0;processor_id < MAX_CPUS;processor_id++) {
+    for(processor_id = 0;processor_id < MAX_CPUS;processor_id++) {
         if(!searchers[processor_id].used) {
-        psearcher = &searchers[processor_id];
-        psearcher->used = 1;
-        break;
+            psearcher = &searchers[processor_id];
+            psearcher->used = 1;
+            break;
         }
     }
     l_unlock(searcher_lock);
@@ -302,3 +303,4 @@ DLLExport int CDECL probe_neural_network(int player, int* piece,int* square) {
 
     return score;
 }
+#endif

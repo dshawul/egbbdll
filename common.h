@@ -27,7 +27,7 @@ enum CHESSMEN {
     king = 1,queen,rook,bishop,knight,pawn
 };
 enum OCCUPANCY {
-    empty,wking,wqueen,wrook,wbishop,wknight,wpawn,
+    blank,wking,wqueen,wrook,wbishop,wknight,wpawn,
           bking,bqueen,brook,bbishop,bknight,bpawn,elephant
 };
 enum RANKS {
@@ -108,9 +108,13 @@ enum RESULTS{
 #define MIRRORD64(sq)    SQ64(file64(sq),rank64(sq))
 
 /*distance*/
+#undef MAX
+#undef MIN
+#define MAX(a, b)        (((a) > (b)) ? (a) : (b))
+#define MIN(a, b)        (((a) < (b)) ? (a) : (b))
 #define f_distance(x,y)  abs(file(x)-file(y))
 #define r_distance(x,y)  abs(rank(x)-rank(y))
-#define distance(x,y)    max(f_distance(x,y),r_distance(x,y))
+#define distance(x,y)    MAX(f_distance(x,y),r_distance(x,y))
 #define is_light(x)      ((file(x)+rank(x)) & 1)
 #define is_light64(x)    ((file64(x)+rank64(x)) & 1)
 
