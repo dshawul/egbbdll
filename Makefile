@@ -1,14 +1,15 @@
 ############################
 # Choose compiler and flags
 ############################
-CC = g++
-CFLAGS = -O3 -Wno-unused-result
+#CC = g++
+#CFLAGS = -O3 -Wno-unused-result
+#LDFLAGS =
 
-#CC = x86_64-w64-mingw32-g++
-#CFLAGS = -O3 -Wno-unused-result -static
+CC = x86_64-w64-mingw32-g++
+CFLAGS = -O3 -Wno-unused-result
+LDFLAGS = -static 
 
 DEFINES =
-LDFLAGS = 
 
 #DEFINES += -DBIGENDIAN
 

@@ -8,10 +8,10 @@ enum {LOAD_NONE,LOAD_4MEN,SMART_LOAD,LOAD_5MEN,LOAD_5MEN_LZ};
 
 #define _NOTFOUND 99999
 
-#if defined (_WIN32) || defined(_WIN64)
-     #define DLLExport extern "C" __declspec(dllexport)
+#if defined (_WIN32)
+#   define DLLExport extern "C" __declspec(dllexport)
 #else
-     #define DLLExport extern "C"
+#   define DLLExport extern "C"
 #endif
 
 /*4 men*/
