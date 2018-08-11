@@ -1,12 +1,18 @@
 #ifndef __MY_TYPES__
 #define __MY_TYPES__
 
+/*
+Platform specific defines for Windows
+For others, they are set in Makefile
+*/
+#ifdef _MSC_VER
 #define ARC_64BIT
 #define HAS_POPCNT
 #define HAS_PREFETCH
 #define PARALLEL
 #define USE_SPINLOCK
-
+#endif
+#define HAS_BSF HAS_POPCNT
 /*
 int types
 */
@@ -50,49 +56,64 @@ Os stuff
 #    define FMT64      "%lld"
 #    define FMT64W     "%20lld"
 #endif
+
 /*
 Force inline
 */
-#if defined (_MSC_VER)
-#  define FORCEINLINE  __forceinline
-#elif defined (__MINGW32__)
-#  define FORCEINLINE  __forceinline
-#elif defined (__GNUC__)
-#  define FORCEINLINE  __inline __attribute__((always_inline))
-#else
-#  define FORCEINLINE  __inline
+#if !defined(FORCEINLINE)
+#   if defined (__GNUC__)
+#       define FORCEINLINE  __inline __attribute__((always_inline))
+#   elif defined (_WIN32)
+#       define FORCEINLINE  __forceinline
+#   else
+#       define FORCEINLINE  __inline
+#   endif
 #endif
 
 /*
 Intrinsic popcnt
 */
 #if defined(HAS_POPCNT) && defined(ARC_64BIT)
-#   if defined (__GNUC__)
-#       define popcnt(x)                                \
-    ({                                                  \
-    typeof(x) __ret;                                    \
-    __asm__("popcnt %1, %0" : "=r" (__ret) : "r" (x));  \
-    __ret;                                              \
-})
-#   elif defined(_MSC_VER) && defined(__INTEL_COMPILER)
+#   if defined(__GNUC__)
+#       define popcnt(x) __builtin_popcountll(x)
+#   elif defined(_WIN32)
 #       include <nmmintrin.h>
 #       define popcnt(b) _mm_popcnt_u64(b)
-#   else
-#       include<intrin.h>
-#       define popcnt(b) __popcnt64(b)
 #   endif
 #   define popcnt_sparse(b) popcnt(b)
 #endif 
 
 /*
+Intrinsic bsf
+*/
+#if defined(HAS_BSF) && defined(ARC_64BIT)
+#   if defined(__GNUC__)
+#       define bsf(b) __builtin_ctzll(b)
+#       define bsr(b) (63 - __builtin_clzll(b))
+#   elif defined(_WIN32)
+#       include <intrin.h>
+        FORCEINLINE int bsf(UBMP64 b) {
+            unsigned long x;
+            _BitScanForward64(&x, b);
+            return (int) x;
+        }
+        FORCEINLINE int bsr(UBMP64 b) {
+            unsigned long x;
+            _BitScanReverse64(&x, b);
+            return (int) x;
+        }
+#   endif
+#endif
+
+/*
 Byte swap
 */
-#if defined (__GNUC__)
-#   define bswap32(x)  __builtin_bswap32(x)
-#elif defined(_MSC_VER) && defined(__INTEL_COMPILER)
+#if defined(__INTEL_COMPILER)
 #   define bswap32(x)  _bswap(x)
-#else
+#elif defined(_MSC_VER)
 #   define bswap32(x)  _byteswap_ulong(x)
+#elif defined(__GNUC__)
+#   define bswap32(x)  __builtin_bswap32(x)
 #endif
 
 /*
@@ -166,47 +187,74 @@ Prefetch
 */
 #if defined PARALLEL
 #    define VOLATILE volatile
+#    if defined _MSC_VER
+#       define l_set(x,v) InterlockedExchange((unsigned*)&(x),v)
+#       define l_add(x,v) InterlockedExchangeAdd((unsigned*)&(x),v)
+#       define l_set16(x,v) InterlockedExchange16((short*)&(x),v)
+#       define l_add16(x,v) InterlockedExchangeAdd16((short*)&(x),v)
+#       define l_set8(x,v) InterlockedExchange8((char*)&(x),v)
+#       define l_add8(x,v) InterlockedExchangeAdd8((char*)&(x),v)
+#       define l_and8(x,v) InterlockedAnd8((char*)&(x),v)
+#       define l_or8(x,v) InterlockedOr8((char*)&(x),v)
+#    else
+#       define l_set(x,v) __sync_lock_test_and_set(&(x),v)
+#       define l_add(x,v) __sync_fetch_and_add(&(x),v)
+#       define l_set16(x,v) __sync_lock_test_and_set((short*)&(x),v)
+#       define l_add16(x,v) __sync_fetch_and_add((short*)&(x),v)
+#       define l_set8(x,v) __sync_lock_test_and_set((char*)&(x),v)
+#       define l_add8(x,v) __sync_fetch_and_add((char*)&(x),v)
+#       define l_and8(x,v) __sync_fetch_and_and((char*)&(x),v)
+#       define l_or8(x,v) __sync_fetch_and_or((char*)&(x),v)
+#    endif
 #    if defined OMP
 #       include <omp.h>
 #       define LOCK          omp_lock_t
 #       define l_create(x)   omp_init_lock(&x)
-#       define l_lock(x)     omp_set_lock(&x)
+#       define l_try_lock(x) omp_set_lock(&x)
+#       define l_lock(x)     omp_test_lock(&x)
 #       define l_unlock(x)   omp_unset_lock(&x)
 inline void l_barrier() { 
 #       pragma omp barrier 
 }
 #    else
 #       ifdef USE_SPINLOCK
-#           if defined _WIN32
-#               define l_test_and_set(x,v) InterlockedExchange((LPLONG)&(x),v)
-#           else
-#               define l_test_and_set(x,v) __sync_lock_test_and_set(&(x),v)
-#           endif
 #           define LOCK VOLATILE int
 #           define l_create(x)   ((x) = 0)
-#           define l_lock(x)     while(l_test_and_set(x,1) != 0) {while((x) != 0) t_pause();}
+#           define l_try_lock(x) (l_set(x,1) != 0)
+#           define l_lock(x)     while(l_try_lock(x)) {while((x) != 0) t_pause();}
 #           define l_unlock(x)   ((x) = 0)
 #       else
 #           if defined _WIN32
 #               define LOCK CRITICAL_SECTION
 #               define l_create(x)   InitializeCriticalSection(&x)
+#               define l_try_lock(x) TryEnterCriticalSection(&x)
 #               define l_lock(x)     EnterCriticalSection(&x)
 #               define l_unlock(x)   LeaveCriticalSection(&x)  
 #           else
 #               define LOCK pthread_mutex_t
 #               define l_create(x)   pthread_mutex_init(&(x),0)
+#               define l_try_lock(x) pthread_mutex_trylock(&(x))
 #               define l_lock(x)     pthread_mutex_lock(&(x))
 #               define l_unlock(x)   pthread_mutex_unlock(&(x))
 #           endif
 #       endif
-#   endif
+#    endif
 #else
 #    define VOLATILE
 #    define LOCK int
 #    define l_create(x)
 #    define l_lock(x)
+#    define l_try_lock(x) (1)
 #    define l_unlock(x)
 #    define l_barrier()
+#    define l_set(x,v) ((x) = v)
+#    define l_add(x,v) ((x) += v)
+#    define l_set16(x,v) ((x) = v)
+#    define l_add16(x,v) ((x) += v)
+#    define l_set8(x,v) ((x) = v)
+#    define l_add8(x,v) ((x) += v)
+#    define l_and8(x,v) ((x) &= v)
+#    define l_or8(x,v) ((x) |= v)
 #endif
 /*
 * Performance counters
@@ -250,4 +298,3 @@ inline double get_diff(TIMER s,TIMER e) {
 end
 */
 #endif
-
