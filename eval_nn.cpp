@@ -9,20 +9,39 @@
 
 using namespace tensorflow;
 
-static std::unique_ptr<Session> session;
+static Session* session;
 static const string main_input_layer = "main_input";
 static const string aux_input_layer = "aux_input";
 static const string output_layer = "value_0";
 static const int CHANNELS = 12;
 static const int PARAMS = 5;
-static Tensor* main_input[MAX_CPUS];
-static Tensor* aux_input[MAX_CPUS];
+
+struct InputData {
+    Tensor* main_input;
+    Tensor* aux_input;
+    int n_batch;
+
+    InputData() {
+        main_input = 0;
+        aux_input = 0;
+        n_batch = 0;
+    }
+    void alloc() {
+        static const int MAX_BATCH = 256;
+        static const TensorShape main_input_shape({MAX_BATCH, 8, 8, CHANNELS});
+        static const TensorShape aux_input_shape({MAX_BATCH, PARAMS});
+        main_input = new Tensor(DT_FLOAT, main_input_shape);
+        aux_input = new Tensor(DT_FLOAT, aux_input_shape);
+    }
+};
+
+static std::unordered_map<int,InputData> input_map;
 
 /*
    Load NN
 */
 static Status LoadGraph(const string& graph_file_name,
-        std::unique_ptr<Session>* session) {
+        Session** session) {
 
     GraphDef graph_def;
     Status load_graph_status =
@@ -36,7 +55,7 @@ static Status LoadGraph(const string& graph_file_name,
     options.config.set_intra_op_parallelism_threads(1);
     options.config.set_inter_op_parallelism_threads(1);
 
-    session->reset(NewSession(options));
+    Status status = NewSession(options, session);
     Status session_create_status = (*session)->Create(graph_def);
     if (!session_create_status.ok()) {
         return session_create_status;
@@ -60,12 +79,7 @@ DLLExport void CDECL load_neural_network(char* path) {
 
     TF_CHECK_OK( LoadGraph(path, &session) );
 
-    static const TensorShape main_input_shape({1, 8, 8, CHANNELS});
-    static const TensorShape aux_input_shape({1, PARAMS});
-    for(int i = 0;i < MAX_CPUS; i++) {
-        main_input[i] = new Tensor(DT_FLOAT, main_input_shape);
-        aux_input[i] = new Tensor(DT_FLOAT, aux_input_shape);
-    }
+
 
     /*warm up*/
     int piece = _EMPTY, square = _EMPTY;
@@ -256,51 +270,78 @@ static inline int logit(double p) {
 }
 
 /*
-   Evaluate position using NN
+   Add position to batch
 */
 
-DLLExport int CDECL probe_neural_network(int player, int* piece,int* square) {
+DLLExport void CDECL add_to_batch(int player, int* piece,int* square) {
 
-    //grab searcher
-    PSEARCHER psearcher;
-    int processor_id;
-    l_lock(searcher_lock);
-    for(processor_id = 0;processor_id < MAX_CPUS;processor_id++) {
-        if(!searchers[processor_id].used) {
-            psearcher = &searchers[processor_id];
-            psearcher->used = 1;
-            break;
-        }
-    }
-    l_unlock(searcher_lock);
+    //get identifier
+    int tid = GETTID();
+    InputData& inp = input_map[tid];
+    if(!inp.main_input) inp.alloc();
 
-    Tensor* pminput = main_input[processor_id];
-    Tensor* painput = aux_input[processor_id];
+    //input
+    float* minput = (float*)(inp.main_input->tensor_data().data());
+    float* ainput = (float*)(inp.aux_input->tensor_data().data());
 
-    //inputs
-    float* minput = (float*)(pminput->tensor_data().data());
-    float* ainput = (float*)(painput->tensor_data().data());
+    minput += inp.n_batch * (8 * 8 * CHANNELS);
+    ainput += inp.n_batch * (PARAMS);
 
+    //fill planes
     fill_input_planes(player, piece, square, minput, ainput);
+    inp.n_batch++;
+}
+
+/*
+   Do batch inference
+*/
+
+DLLExport void CDECL probe_neural_network_batch(int* scores) {
+
+    //get identifier
+    int tid = GETTID();
+    InputData& inp = input_map[tid];
+
+    //input
+    Tensor minput = Tensor(DT_FLOAT, {inp.n_batch, 8, 8, CHANNELS});
+    Tensor ainput = Tensor(DT_FLOAT, {inp.n_batch, PARAMS});
+
+    float* mp = (float*)(minput.tensor_data().data());
+    float* ap = (float*)(ainput.tensor_data().data());
+    float* mpb = (float*)(inp.main_input->tensor_data().data());
+    float* apb = (float*)(inp.aux_input->tensor_data().data());
+    memcpy(mp, mpb, inp.n_batch*8*8*CHANNELS*sizeof(float) );
+    memcpy(ap, apb, inp.n_batch*PARAMS*sizeof(float) );
 
     //outputs
     std::vector<Tensor> outputs;
 
     //run session
     std::vector<std::pair<string, Tensor> > inputs = {
-        {main_input_layer, *pminput},
-        {aux_input_layer, *painput}
+        {main_input_layer, minput},
+        {aux_input_layer,  ainput}
     };
 
     TF_CHECK_OK( session->Run(inputs, {output_layer}, {}, &outputs) );
 
     //extract and return score in centi-pawns
-    float p = outputs[0].flat<float>()(0);
-    int score = logit(p);
+    for(int i = 0;i < inp.n_batch; i++) {
+        float p = outputs[0].flat<float>()(i);
+        scores[i] = logit(p);
+    }
 
-    //clear searcher
-    psearcher->used = 0;
+    inp.n_batch = 0;
+}
 
+/*
+   Evaluate position using NN
+*/
+
+DLLExport int CDECL probe_neural_network(int player, int* piece,int* square) {
+    int score;
+    add_to_batch(player,piece,square);
+    probe_neural_network_batch(&score);
     return score;
 }
+
 #endif
