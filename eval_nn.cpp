@@ -16,22 +16,32 @@ static const string output_layer = "value_0";
 static const int CHANNELS = 12;
 static const int PARAMS = 5;
 
+static int BATCH_SIZE;
+
 struct InputData {
     Tensor* main_input;
     Tensor* aux_input;
-    int n_batch;
+    VOLATILE int n_batch;
+    VOLATILE int n_idle;
+    VOLATILE int n_finished;
+    VOLATILE int save_n_batch;
+    int* scores;
 
     InputData() {
         main_input = 0;
         aux_input = 0;
         n_batch = 0;
+        save_n_batch = 0;
+        scores = 0;
+        n_idle = 0;
+        n_finished = 0;
     }
     void alloc() {
-        static const int MAX_BATCH = 256;
-        static const TensorShape main_input_shape({MAX_BATCH, 8, 8, CHANNELS});
-        static const TensorShape aux_input_shape({MAX_BATCH, PARAMS});
+        static const TensorShape main_input_shape({BATCH_SIZE, 8, 8, CHANNELS});
+        static const TensorShape aux_input_shape({BATCH_SIZE, PARAMS});
         main_input = new Tensor(DT_FLOAT, main_input_shape);
         aux_input = new Tensor(DT_FLOAT, aux_input_shape);
+        scores = new int[BATCH_SIZE];
     }
 };
 
@@ -67,7 +77,7 @@ static Status LoadGraph(const string& graph_file_name,
 /*
    Initialize tensorflow
 */
-DLLExport void CDECL load_neural_network(char* path) {
+DLLExport void CDECL load_neural_network(char* path, int n_processors) {
     printf("Loading neural network....\n");
     fflush(stdout);
 
@@ -79,11 +89,15 @@ DLLExport void CDECL load_neural_network(char* path) {
 
     TF_CHECK_OK( LoadGraph(path, &session) );
 
+    BATCH_SIZE = n_processors;
 
-
-    /*warm up*/
+    /*warm up nn*/
     int piece = _EMPTY, square = _EMPTY;
-    probe_neural_network(0, &piece, &square);
+    InputData& inp = input_map[0];
+    for(int i = 0;i < BATCH_SIZE;i++)
+        add_to_batch(0, &piece, &square);
+    probe_neural_network_batch(inp.scores);
+    inp.n_finished = BATCH_SIZE;
 
     printf("Neural network loaded !      \n");
     fflush(stdout);
@@ -273,10 +287,11 @@ static inline int logit(double p) {
    Add position to batch
 */
 
-DLLExport void CDECL add_to_batch(int player, int* piece,int* square) {
+DLLExport int CDECL add_to_batch(int player, int* piece,int* square) {
+    int offset;
 
     //get identifier
-    int tid = GETTID();
+    int tid = 0;//GETTID();
     InputData& inp = input_map[tid];
     if(!inp.main_input) inp.alloc();
 
@@ -284,12 +299,19 @@ DLLExport void CDECL add_to_batch(int player, int* piece,int* square) {
     float* minput = (float*)(inp.main_input->tensor_data().data());
     float* ainput = (float*)(inp.aux_input->tensor_data().data());
 
-    minput += inp.n_batch * (8 * 8 * CHANNELS);
-    ainput += inp.n_batch * (PARAMS);
+    l_lock(searcher_lock);
+    offset = inp.n_batch;
+    inp.n_batch++;
+    l_unlock(searcher_lock);
+
+    //offsets
+    minput += offset * (8 * 8 * CHANNELS);
+    ainput += offset * (PARAMS);
 
     //fill planes
     fill_input_planes(player, piece, square, minput, ainput);
-    inp.n_batch++;
+
+    return offset;
 }
 
 /*
@@ -299,27 +321,16 @@ DLLExport void CDECL add_to_batch(int player, int* piece,int* square) {
 DLLExport void CDECL probe_neural_network_batch(int* scores) {
 
     //get identifier
-    int tid = GETTID();
+    int tid = 0;//GETTID();
     InputData& inp = input_map[tid];
-
-    //input
-    Tensor minput = Tensor(DT_FLOAT, {inp.n_batch, 8, 8, CHANNELS});
-    Tensor ainput = Tensor(DT_FLOAT, {inp.n_batch, PARAMS});
-
-    float* mp = (float*)(minput.tensor_data().data());
-    float* ap = (float*)(ainput.tensor_data().data());
-    float* mpb = (float*)(inp.main_input->tensor_data().data());
-    float* apb = (float*)(inp.aux_input->tensor_data().data());
-    memcpy(mp, mpb, inp.n_batch*8*8*CHANNELS*sizeof(float) );
-    memcpy(ap, apb, inp.n_batch*PARAMS*sizeof(float) );
 
     //outputs
     std::vector<Tensor> outputs;
 
     //run session
     std::vector<std::pair<string, Tensor> > inputs = {
-        {main_input_layer, minput},
-        {aux_input_layer,  ainput}
+        {main_input_layer, *inp.main_input},
+        {aux_input_layer,  *inp.aux_input}
     };
 
     TF_CHECK_OK( session->Run(inputs, {output_layer}, {}, &outputs) );
@@ -330,7 +341,11 @@ DLLExport void CDECL probe_neural_network_batch(int* scores) {
         scores[i] = logit(p);
     }
 
+    l_lock(searcher_lock);
+    inp.n_finished = 0;
+    inp.save_n_batch = inp.n_batch;
     inp.n_batch = 0;
+    l_unlock(searcher_lock);
 }
 
 /*
@@ -338,10 +353,59 @@ DLLExport void CDECL probe_neural_network_batch(int* scores) {
 */
 
 DLLExport int CDECL probe_neural_network(int player, int* piece,int* square) {
-    int score;
-    add_to_batch(player,piece,square);
-    probe_neural_network_batch(&score);
-    return score;
+
+    //get identifier
+    int tid = 0;//GETTID();
+    InputData& inp = input_map[tid];
+
+    //add to batch
+    int offset = add_to_batch(player,piece,square);
+
+    //pause threads till eval completes
+    if(offset + 1 < BATCH_SIZE) {
+        l_lock(searcher_lock);
+        inp.n_idle++;
+        l_unlock(searcher_lock);
+
+        TIMER s,e;
+        get_perf(s);
+
+        while(inp.n_batch) {
+            t_yield();
+
+            if(offset + 1 == inp.n_batch) {
+                get_perf(e);
+                double diff = get_diff(s,e) / 1e6;
+                //100 milliseconds waiting time before forcing evaluation
+                if(diff >= 100) {
+#if 0
+                    printf("%d = %f batchsize %d / %d\n",offset,diff,inp.n_batch,BATCH_SIZE);
+                    fflush(stdout);
+#endif
+                    probe_neural_network_batch(inp.scores);
+                    break;
+                }
+            }
+        }
+
+        l_lock(searcher_lock);
+        inp.n_idle--;
+        l_unlock(searcher_lock);
+    } else {
+        probe_neural_network_batch(inp.scores);
+    }
+
+    //mark finished
+    l_lock(searcher_lock);
+    inp.n_finished++;
+    l_unlock(searcher_lock);
+
+    //wait for previous eval to finish
+    while(inp.n_finished < inp.save_n_batch) {
+        t_yield();
+    }
+
+    return inp.scores[offset];
 }
 
 #endif
