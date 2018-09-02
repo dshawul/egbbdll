@@ -17,23 +17,23 @@ static const int CHANNELS = 12;
 static const int PARAMS = 5;
 
 static int BATCH_SIZE;
+static int N_DEVICES = 1;
+static VOLATILE int chosen_device = 0;
 
 struct InputData {
     Tensor* main_input;
     Tensor* aux_input;
-    VOLATILE int n_batch;
-    VOLATILE int n_idle;
-    VOLATILE int n_finished;
-    VOLATILE int save_n_batch;
     int* scores;
-
+    VOLATILE int n_batch;
+    VOLATILE int save_n_batch;
+    VOLATILE int n_finished;
+    
     InputData() {
         main_input = 0;
         aux_input = 0;
+        scores = 0;
         n_batch = 0;
         save_n_batch = 0;
-        scores = 0;
-        n_idle = 0;
         n_finished = 0;
     }
     void alloc() {
@@ -67,6 +67,7 @@ static Status LoadGraph(const string& graph_file_name,
 
     Status status = NewSession(options, session);
     Status session_create_status = (*session)->Create(graph_def);
+
     if (!session_create_status.ok()) {
         return session_create_status;
     }
@@ -78,18 +79,27 @@ static Status LoadGraph(const string& graph_file_name,
    Initialize tensorflow
 */
 DLLExport void CDECL load_neural_network(char* path, int n_processors) {
+
+    /*Message*/
     printf("Loading neural network....\n");
     fflush(stdout);
 
+    /*setenv variables*/
 #ifdef _WIN32
     SetEnvironmentVariable((LPCWSTR)"TF_CPP_MIN_LOG_LEVEL",(LPCWSTR)"3");
 #else
     setenv("TF_CPP_MIN_LOG_LEVEL","3",1);
 #endif
 
+    /*Load NN*/
     TF_CHECK_OK( LoadGraph(path, &session) );
 
-    BATCH_SIZE = n_processors;
+    /*Initialize tensors*/
+    BATCH_SIZE = n_processors / N_DEVICES;
+    for(int i = 0;i < N_DEVICES;i++) {
+        InputData& inp = input_map[i];
+        inp.alloc();
+    }
 
     /*warm up nn*/
     int piece = _EMPTY, square = _EMPTY;
@@ -99,8 +109,152 @@ DLLExport void CDECL load_neural_network(char* path, int n_processors) {
     probe_neural_network_batch(inp.scores);
     inp.n_finished = BATCH_SIZE;
 
+    /*Message*/
     printf("Neural network loaded !      \n");
     fflush(stdout);
+}
+
+/*
+   Add position to batch
+*/
+static void fill_input_planes(int player, int* piece,int* square, float* data, float* adata);
+
+DLLExport int CDECL add_to_batch(int player, int* piece, int* square, int batch_id) {
+    
+    //get identifier
+    InputData& inp = input_map[batch_id];
+
+    //input
+    float* minput = (float*)(inp.main_input->tensor_data().data());
+    float* ainput = (float*)(inp.aux_input->tensor_data().data());
+
+    int offset;
+
+    l_lock(searcher_lock);
+    offset = inp.n_batch;
+    inp.n_batch++;
+    l_unlock(searcher_lock);
+
+    //offsets
+    minput += offset * (8 * 8 * CHANNELS);
+    ainput += offset * (PARAMS);
+
+    //fill planes
+    fill_input_planes(player, piece, square, minput, ainput);
+
+    return offset;
+}
+
+/*
+   Do batch inference
+*/
+
+static inline int logit(double p);
+
+DLLExport void CDECL probe_neural_network_batch(int* scores, int batch_id) {
+
+    //get identifier
+    InputData& inp = input_map[batch_id];
+
+    //outputs
+    std::vector<Tensor> outputs;
+
+    //run session
+    std::vector<std::pair<string, Tensor> > inputs = {
+        {main_input_layer, *inp.main_input},
+        {aux_input_layer,  *inp.aux_input}
+    };
+
+    TF_CHECK_OK( session->Run(inputs, {output_layer}, {}, &outputs) );
+
+    //extract and return score in centi-pawns
+    for(int i = 0;i < inp.n_batch; i++) {
+        float p = outputs[0].flat<float>()(i);
+        scores[i] = logit(p);
+    }
+
+    l_lock(searcher_lock);
+    inp.n_finished = 0;
+    inp.save_n_batch = inp.n_batch;
+    inp.n_batch = 0;
+    l_unlock(searcher_lock);
+}
+
+/*
+   Evaluate position using NN
+*/
+
+DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
+
+    //choose batch id
+    int batch_id;
+    do {
+        l_lock(searcher_lock);
+        batch_id = chosen_device++;
+        if(chosen_device == N_DEVICES)
+            chosen_device = 0;
+        l_unlock(searcher_lock);
+    } while(input_map[batch_id].n_batch == BATCH_SIZE);
+    
+    //get identifier
+    InputData& inp = input_map[batch_id];
+
+    //add to batch
+    int offset = add_to_batch(player,piece,square,batch_id);
+
+    //pause threads till eval completes
+    if(offset + 1 < BATCH_SIZE) {
+
+        TIMER s,e;
+        if(offset + 1 == inp.n_batch) {
+            get_perf(s);
+        }
+
+        while(inp.n_batch) {
+            t_yield();
+
+            if(offset + 1 == inp.n_batch) {
+                get_perf(e);
+                int diff = int(get_diff(s,e) / 1e6);
+
+                if(diff >= 200) {
+#if 1
+                    printf("\n# [%d] time %dms batchsize %d / %d\n",
+                        offset,int(diff),inp.n_batch,BATCH_SIZE);
+                    fflush(stdout);
+#endif
+                    probe_neural_network_batch(inp.scores,batch_id);
+                    break;
+                }
+            }
+        }
+
+    } else {
+        probe_neural_network_batch(inp.scores,batch_id);
+    }
+
+    //mark finished
+    l_lock(searcher_lock);
+    inp.n_finished++;
+    l_unlock(searcher_lock);
+
+    //wait for previous eval to finish
+    while(inp.n_finished < inp.save_n_batch) {
+        t_yield();
+    }
+
+    return inp.scores[offset];
+}
+
+/*
+   Convert winning percentage to centi-pawns
+*/
+static const double Kfactor = -log(10.0) / 400.0;
+
+static inline int logit(double p) {
+    if(p < 1e-15) p = 1e-15;
+    else if(p > 1 - 1e-15) p = 1 - 1e-15;
+    return int(log((1 - p) / p) / Kfactor);
 }
 
 /*
@@ -271,141 +425,4 @@ static void fill_input_planes(int player, int* piece,int* square, float* data, f
 #undef D
 
 }
-
-/*
-   Convert winning percentage to centi-pawns
-*/
-static const double Kfactor = -log(10.0) / 400.0;
-
-static inline int logit(double p) {
-    if(p < 1e-15) p = 1e-15;
-    else if(p > 1 - 1e-15) p = 1 - 1e-15;
-    return int(log((1 - p) / p) / Kfactor);
-}
-
-/*
-   Add position to batch
-*/
-
-DLLExport int CDECL add_to_batch(int player, int* piece,int* square) {
-    int offset;
-
-    //get identifier
-    int tid = 0;//GETTID();
-    InputData& inp = input_map[tid];
-    if(!inp.main_input) inp.alloc();
-
-    //input
-    float* minput = (float*)(inp.main_input->tensor_data().data());
-    float* ainput = (float*)(inp.aux_input->tensor_data().data());
-
-    l_lock(searcher_lock);
-    offset = inp.n_batch;
-    inp.n_batch++;
-    l_unlock(searcher_lock);
-
-    //offsets
-    minput += offset * (8 * 8 * CHANNELS);
-    ainput += offset * (PARAMS);
-
-    //fill planes
-    fill_input_planes(player, piece, square, minput, ainput);
-
-    return offset;
-}
-
-/*
-   Do batch inference
-*/
-
-DLLExport void CDECL probe_neural_network_batch(int* scores) {
-
-    //get identifier
-    int tid = 0;//GETTID();
-    InputData& inp = input_map[tid];
-
-    //outputs
-    std::vector<Tensor> outputs;
-
-    //run session
-    std::vector<std::pair<string, Tensor> > inputs = {
-        {main_input_layer, *inp.main_input},
-        {aux_input_layer,  *inp.aux_input}
-    };
-
-    TF_CHECK_OK( session->Run(inputs, {output_layer}, {}, &outputs) );
-
-    //extract and return score in centi-pawns
-    for(int i = 0;i < inp.n_batch; i++) {
-        float p = outputs[0].flat<float>()(i);
-        scores[i] = logit(p);
-    }
-
-    l_lock(searcher_lock);
-    inp.n_finished = 0;
-    inp.save_n_batch = inp.n_batch;
-    inp.n_batch = 0;
-    l_unlock(searcher_lock);
-}
-
-/*
-   Evaluate position using NN
-*/
-
-DLLExport int CDECL probe_neural_network(int player, int* piece,int* square) {
-
-    //get identifier
-    int tid = 0;//GETTID();
-    InputData& inp = input_map[tid];
-
-    //add to batch
-    int offset = add_to_batch(player,piece,square);
-
-    //pause threads till eval completes
-    if(offset + 1 < BATCH_SIZE) {
-        l_lock(searcher_lock);
-        inp.n_idle++;
-        l_unlock(searcher_lock);
-
-        TIMER s,e;
-        get_perf(s);
-
-        while(inp.n_batch) {
-            t_yield();
-
-            if(offset + 1 == inp.n_batch) {
-                get_perf(e);
-                double diff = get_diff(s,e) / 1e6;
-                //100 milliseconds waiting time before forcing evaluation
-                if(diff >= 100) {
-#if 0
-                    printf("%d = %f batchsize %d / %d\n",offset,diff,inp.n_batch,BATCH_SIZE);
-                    fflush(stdout);
-#endif
-                    probe_neural_network_batch(inp.scores);
-                    break;
-                }
-            }
-        }
-
-        l_lock(searcher_lock);
-        inp.n_idle--;
-        l_unlock(searcher_lock);
-    } else {
-        probe_neural_network_batch(inp.scores);
-    }
-
-    //mark finished
-    l_lock(searcher_lock);
-    inp.n_finished++;
-    l_unlock(searcher_lock);
-
-    //wait for previous eval to finish
-    while(inp.n_finished < inp.save_n_batch) {
-        t_yield();
-    }
-
-    return inp.scores[offset];
-}
-
 #endif
