@@ -17,6 +17,8 @@ static const int CHANNELS = 12;
 static const int PARAMS = 5;
 
 static int BATCH_SIZE;
+static VOLATILE int n_active_searchers;
+static int n_searchers;
 static int N_DEVICES = 1;
 static VOLATILE int chosen_device = 0;
 
@@ -78,7 +80,7 @@ static Status LoadGraph(const string& graph_file_name,
 /*
    Initialize tensorflow
 */
-DLLExport void CDECL load_neural_network(char* path, int n_processors) {
+DLLExport void CDECL load_neural_network(char* path, int n_searchers_l) {
 
     /*Message*/
     printf("Loading neural network....\n");
@@ -95,7 +97,9 @@ DLLExport void CDECL load_neural_network(char* path, int n_processors) {
     TF_CHECK_OK( LoadGraph(path, &session) );
 
     /*Initialize tensors*/
-    BATCH_SIZE = n_processors / N_DEVICES;
+    n_searchers = n_searchers_l;
+    n_active_searchers = n_searchers;
+    BATCH_SIZE = n_searchers / N_DEVICES;
     for(int i = 0;i < N_DEVICES;i++) {
         InputData& inp = input_map[i];
         inp.alloc();
@@ -205,27 +209,21 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     //pause threads till eval completes
     if(offset + 1 < BATCH_SIZE) {
 
-        TIMER s,e;
-        if(offset + 1 == inp.n_batch) {
-            get_perf(s);
-        }
-
         while(inp.n_batch) {
             t_yield();
 
-            if(offset + 1 == inp.n_batch) {
-                get_perf(e);
-                int diff = int(get_diff(s,e) / 1e6);
-
-                if(diff >= 200) {
-#if 1
-                    printf("\n# [%d] time %dms batchsize %d / %d\n",
-                        offset,int(diff),inp.n_batch,BATCH_SIZE);
+            if(offset + 1 == inp.n_batch
+               && n_active_searchers < n_searchers 
+               && inp.n_batch >= n_active_searchers
+               ) {
+#if 0
+                    printf("\n# batchsize %d / %d workers %d / %d\n",
+                        inp.n_batch,BATCH_SIZE,
+                        n_active_searchers, n_searchers);
                     fflush(stdout);
 #endif
-                    probe_neural_network_batch(inp.scores,batch_id);
-                    break;
-                }
+                probe_neural_network_batch(inp.scores,batch_id);
+                break;
             }
         }
 
@@ -244,6 +242,15 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     }
 
     return inp.scores[offset];
+}
+
+/*
+   Set number of active workers
+*/
+DLLExport void CDECL set_active_searchers(int n_searchers) {
+    l_lock(searcher_lock);
+    n_active_searchers = n_searchers;
+    l_unlock(searcher_lock);
 }
 
 /*
