@@ -210,7 +210,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     if(offset + 1 < BATCH_SIZE) {
 
         while(inp.n_batch) {
-            t_yield();
+            t_sleep(0);
 
             if(offset + 1 == inp.n_batch
                && n_active_searchers < n_searchers 
@@ -238,7 +238,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
 
     //wait for previous eval to finish
     while(inp.n_finished < inp.save_n_batch) {
-        t_yield();
+        t_sleep(0);
     }
 
     return inp.scores[offset];

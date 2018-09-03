@@ -87,7 +87,7 @@ enum RESULTS{
 #define MAX_STR            256
 #define MAX_MOVES          256
 #define MAX_PLY              8
-#define MAX_CPUS            64
+#define MAX_CPUS           256
 
 /*square*/
 #define file(x)          ((x) &  7)
