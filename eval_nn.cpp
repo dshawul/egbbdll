@@ -47,7 +47,7 @@ struct InputData {
     }
 };
 
-static std::unordered_map<int,InputData> input_map;
+static std::map<int,InputData> input_map;
 
 /*
    Load NN
@@ -210,7 +210,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     if(offset + 1 < BATCH_SIZE) {
 
         while(inp.n_batch) {
-            t_sleep(0);
+            t_sleep(1);
 
             if(offset + 1 == inp.n_batch
                && n_active_searchers < n_searchers 
@@ -247,7 +247,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
 /*
    Set number of active workers
 */
-DLLExport void CDECL set_active_searchers(int n_searchers) {
+DLLExport void CDECL set_num_active_searchers(int n_searchers) {
     l_lock(searcher_lock);
     n_active_searchers = n_searchers;
     l_unlock(searcher_lock);

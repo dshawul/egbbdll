@@ -2,11 +2,11 @@
 # Choose compiler and flags
 ############################
 CC = g++
-CFLAGS = -O3 -Wno-unused-result
+CFLAGS = -O3 -Wno-unused-result -std=c++11
 LDFLAGS =
 
 #CC = x86_64-w64-mingw32-g++
-#CFLAGS = -O3 -Wno-unused-result
+#CFLAGS = -O3 -Wno-unused-result -std=c++11
 #LDFLAGS = -static 
 
 DEFINES =
@@ -65,7 +65,7 @@ $(EXE): $(OBJ)
 	$(CC) $(CFLAGS) $(DEFINES) -c -fPIC -o $@ $<
 
 eval_nn.o: eval_nn.cpp
-	$(CC) $(CFLAGS) $(DEFINES) ${TF_INC} -std=c++11 -c -fPIC -o $@ $<
+	$(CC) $(CFLAGS) $(DEFINES) ${TF_INC} -c -fPIC -o $@ $<
 
 clean:
 	$(RM) $(OBJ)
