@@ -9,17 +9,19 @@
 
 using namespace tensorflow;
 
-static Session* session;
+static Session** session;
 static const string main_input_layer = "main_input";
 static const string aux_input_layer = "aux_input";
 static const string output_layer = "value_0";
 static const int CHANNELS = 12;
 static const int PARAMS = 5;
 
-static int BATCH_SIZE;
-static VOLATILE int n_active_searchers;
-static int n_searchers;
 static int N_DEVICES = 1;
+static int BATCH_SIZE;
+static int n_searchers;
+static VOLATILE int n_active_searchers;
+static VOLATILE int n_finished_threads;
+static VOLATILE int n_batch_total = 0;
 static VOLATILE int chosen_device = 0;
 
 struct InputData {
@@ -27,16 +29,14 @@ struct InputData {
     Tensor* aux_input;
     int* scores;
     VOLATILE int n_batch;
-    VOLATILE int save_n_batch;
-    VOLATILE int n_finished;
-    
+    VOLATILE int n_batch_i;
+ 
     InputData() {
         main_input = 0;
         aux_input = 0;
         scores = 0;
         n_batch = 0;
-        save_n_batch = 0;
-        n_finished = 0;
+        n_batch_i = 0;
     }
     void alloc() {
         static const TensorShape main_input_shape({BATCH_SIZE, 8, 8, CHANNELS});
@@ -52,8 +52,7 @@ static std::map<int,InputData> input_map;
 /*
    Load NN
 */
-static Status LoadGraph(const string& graph_file_name,
-        Session** session) {
+static Status LoadGraph(const string& graph_file_name, Session** session, int gpu_id) {
 
     GraphDef graph_def;
     Status load_graph_status =
@@ -83,7 +82,7 @@ static Status LoadGraph(const string& graph_file_name,
 DLLExport void CDECL load_neural_network(char* path, int n_searchers_l) {
 
     /*Message*/
-    printf("Loading neural network....\n");
+    printf("Loading neural network ...\n");
     fflush(stdout);
 
     /*setenv variables*/
@@ -93,8 +92,11 @@ DLLExport void CDECL load_neural_network(char* path, int n_searchers_l) {
     setenv("TF_CPP_MIN_LOG_LEVEL","3",1);
 #endif
 
-    /*Load NN*/
-    TF_CHECK_OK( LoadGraph(path, &session) );
+    /*Load NN on GPUs*/
+    session = new Session*[N_DEVICES];
+    for(int dev_id = 0; dev_id < N_DEVICES; dev_id++) {
+        TF_CHECK_OK( LoadGraph(path, &session[dev_id], dev_id) );
+    }
 
     /*Initialize tensors*/
     n_searchers = n_searchers_l;
@@ -106,15 +108,21 @@ DLLExport void CDECL load_neural_network(char* path, int n_searchers_l) {
     }
 
     /*warm up nn*/
-    int piece = _EMPTY, square = _EMPTY;
-    InputData& inp = input_map[0];
-    for(int i = 0;i < BATCH_SIZE;i++)
-        add_to_batch(0, &piece, &square);
-    probe_neural_network_batch(inp.scores);
-    inp.n_finished = BATCH_SIZE;
+    n_finished_threads = 0;
+    n_batch_total = 0;
+    for(int dev_id = 0; dev_id < N_DEVICES; dev_id++) {
+        int piece = _EMPTY, square = _EMPTY;
+        InputData& inp = input_map[dev_id];
+        for(int i = 0;i < BATCH_SIZE;i++)
+            add_to_batch(0, &piece, &square, dev_id);
+        inp.n_batch_i = inp.n_batch;
+        probe_neural_network_batch(inp.scores, dev_id);
+    }
+    n_finished_threads = 0;
+    n_batch_total = 0;
 
     /*Message*/
-    printf("Neural network loaded !      \n");
+    printf("Neural network loaded !\t\n");
     fflush(stdout);
 }
 
@@ -132,14 +140,8 @@ DLLExport int CDECL add_to_batch(int player, int* piece, int* square, int batch_
     float* minput = (float*)(inp.main_input->tensor_data().data());
     float* ainput = (float*)(inp.aux_input->tensor_data().data());
 
-    int offset;
-
-    l_lock(searcher_lock);
-    offset = inp.n_batch;
-    inp.n_batch++;
-    l_unlock(searcher_lock);
-
     //offsets
+    int offset = l_add(inp.n_batch,1);
     minput += offset * (8 * 8 * CHANNELS);
     ainput += offset * (PARAMS);
 
@@ -169,7 +171,7 @@ DLLExport void CDECL probe_neural_network_batch(int* scores, int batch_id) {
         {aux_input_layer,  *inp.aux_input}
     };
 
-    TF_CHECK_OK( session->Run(inputs, {output_layer}, {}, &outputs) );
+    TF_CHECK_OK( session[batch_id]->Run(inputs, {output_layer}, {}, &outputs) );
 
     //extract and return score in centi-pawns
     for(int i = 0;i < inp.n_batch; i++) {
@@ -177,11 +179,8 @@ DLLExport void CDECL probe_neural_network_batch(int* scores, int batch_id) {
         scores[i] = logit(p);
     }
 
-    l_lock(searcher_lock);
-    inp.n_finished = 0;
-    inp.save_n_batch = inp.n_batch;
-    inp.n_batch = 0;
-    l_unlock(searcher_lock);
+    l_set(inp.n_batch,0);
+    l_set(inp.n_batch_i,0);
 }
 
 /*
@@ -192,13 +191,18 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
 
     //choose batch id
     int batch_id;
-    do {
-        l_lock(searcher_lock);
+    l_lock(searcher_lock);
+    while(true) {
         batch_id = chosen_device++;
         if(chosen_device == N_DEVICES)
             chosen_device = 0;
-        l_unlock(searcher_lock);
-    } while(input_map[batch_id].n_batch == BATCH_SIZE);
+        if(input_map[batch_id].n_batch_i < BATCH_SIZE) {
+            input_map[batch_id].n_batch_i++;
+            n_batch_total++;
+            break;
+        }
+    };
+    l_unlock(searcher_lock);
     
     //get identifier
     InputData& inp = input_map[batch_id];
@@ -214,7 +218,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
 
             if(offset + 1 == inp.n_batch
                && n_active_searchers < n_searchers 
-               && inp.n_batch >= n_active_searchers
+               && n_batch_total >= n_active_searchers
                ) {
 #if 0
                     printf("\n# batchsize %d / %d workers %d / %d\n",
@@ -231,15 +235,12 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
         probe_neural_network_batch(inp.scores,batch_id);
     }
 
-    //mark finished
-    l_lock(searcher_lock);
-    inp.n_finished++;
-    l_unlock(searcher_lock);
-
-    //wait for previous eval to finish
-    while(inp.n_finished < inp.save_n_batch) {
-        t_sleep(0);
+    //Wait untill all eval calls are finished
+    l_add(n_finished_threads,1);
+    while (n_finished_threads > 0 && n_finished_threads < n_active_searchers) {
+        t_sleep(1);
     }
+    l_set(n_finished_threads,0);
 
     return inp.scores[offset];
 }
@@ -248,9 +249,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
    Set number of active workers
 */
 DLLExport void CDECL set_num_active_searchers(int n_searchers) {
-    l_lock(searcher_lock);
-    n_active_searchers = n_searchers;
-    l_unlock(searcher_lock);
+    l_set(n_active_searchers,n_searchers);
 }
 
 /*
