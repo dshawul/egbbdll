@@ -5,6 +5,7 @@ enum {_WHITE,_BLACK};
 enum {_EMPTY,_WKING,_WQUEEN,_WROOK,_WBISHOP,_WKNIGHT,_WPAWN,
              _BKING,_BQUEEN,_BROOK,_BBISHOP,_BKNIGHT,_BPAWN};
 enum {LOAD_NONE,LOAD_4MEN,SMART_LOAD,LOAD_5MEN,LOAD_5MEN_LZ};
+enum {CPU, GPU};
 
 #define _NOTFOUND 99999
 
@@ -35,7 +36,7 @@ DLLExport void CDECL set_num_active_searchers(int n_searchers);
 DLLExport int  CDECL add_to_batch(int player, int* piece, int* square, int batch_id = 0);
 DLLExport int  CDECL probe_neural_network(int player, int* piece, int* square);
 DLLExport void CDECL probe_neural_network_batch(int* scores, int batch_id = 0);
-DLLExport void CDECL load_neural_network(char* path, int n_processors = 1);
+DLLExport void CDECL load_neural_network(char* path, int n_threads = 1, int n_devices = 1, int dev_type = CPU);
 /*private*/
 DLLExport void CDECL load_egbb_into_ram(int side,int* piece);
 DLLExport void CDECL unload_egbb_from_ram(int side,int* piece);

@@ -3,6 +3,7 @@
 
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/public/session.h"
+#include "tensorflow/core/graph/default_device.h"
 
 #include "common.h"
 #include "egbbdll.h"
@@ -16,7 +17,7 @@ static const string output_layer = "value_0";
 static const int CHANNELS = 12;
 static const int PARAMS = 5;
 
-static int N_DEVICES = 1;
+static int N_DEVICES;
 static int BATCH_SIZE;
 static int n_searchers;
 static VOLATILE int n_active_searchers;
@@ -52,7 +53,7 @@ static std::map<int,InputData> input_map;
 /*
    Load NN
 */
-static Status LoadGraph(const string& graph_file_name, Session** session, int gpu_id) {
+static Status LoadGraph(const string& graph_file_name, Session** session, int dev_id, int dev_type) {
 
     GraphDef graph_def;
     Status load_graph_status =
@@ -61,6 +62,9 @@ static Status LoadGraph(const string& graph_file_name, Session** session, int gp
         return errors::NotFound("Failed to load compute graph at '",
                 graph_file_name, "'");
     }
+
+    std::string dev_name = ((dev_type == GPU) ? "/gpu:" : "/cpu:") + std::to_string(dev_id);
+    graph::SetDefaultDevice(dev_name, &graph_def);
 
     SessionOptions options;
     options.config.set_intra_op_parallelism_threads(1);
@@ -79,7 +83,7 @@ static Status LoadGraph(const string& graph_file_name, Session** session, int gp
 /*
    Initialize tensorflow
 */
-DLLExport void CDECL load_neural_network(char* path, int n_searchers_l) {
+DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_devices, int dev_type) {
 
     /*Message*/
     printf("Loading neural network ...\n");
@@ -93,13 +97,14 @@ DLLExport void CDECL load_neural_network(char* path, int n_searchers_l) {
 #endif
 
     /*Load NN on GPUs*/
+    N_DEVICES = n_devices;
     session = new Session*[N_DEVICES];
     for(int dev_id = 0; dev_id < N_DEVICES; dev_id++) {
-        TF_CHECK_OK( LoadGraph(path, &session[dev_id], dev_id) );
+        TF_CHECK_OK( LoadGraph(path, &session[dev_id], dev_id, dev_type) );
     }
 
     /*Initialize tensors*/
-    n_searchers = n_searchers_l;
+    n_searchers = n_threads;
     n_active_searchers = n_searchers;
     BATCH_SIZE = n_searchers / N_DEVICES;
     for(int i = 0;i < N_DEVICES;i++) {
