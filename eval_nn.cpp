@@ -67,9 +67,6 @@ static Status LoadGraph(const string& graph_file_name, Session** session, int de
     graph::SetDefaultDevice(dev_name, &graph_def);
 
     SessionOptions options;
-    options.config.set_intra_op_parallelism_threads(1);
-    options.config.set_inter_op_parallelism_threads(1);
-
     Status status = NewSession(options, session);
     Status session_create_status = (*session)->Create(graph_def);
 
