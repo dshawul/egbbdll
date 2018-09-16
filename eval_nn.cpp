@@ -65,6 +65,8 @@ static Status LoadGraph(const string& graph_file_name, Session** session, int de
 
     std::string dev_name = ((dev_type == GPU) ? "/gpu:" : "/cpu:") + std::to_string(dev_id);
     graph::SetDefaultDevice(dev_name, &graph_def);
+    printf("Loading graph on %s\n",dev_name.c_str());
+    fflush(stdout);
 
     SessionOptions options;
     Status status = NewSession(options, session);
