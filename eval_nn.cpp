@@ -225,8 +225,8 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
                && n_batch_total >= n_active_searchers
                ) {
 #if 0
-                    printf("\n# batchsize %d / %d workers %d / %d\n",
-                        inp.n_batch,BATCH_SIZE,
+                    printf("\n# batchsize %d / %d totalbatch %d workers %d / %d\n",
+                        inp.n_batch,BATCH_SIZE,n_batch_total,
                         n_active_searchers, n_searchers);
                     fflush(stdout);
 #endif
@@ -241,6 +241,8 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
 
     //Wait untill all eval calls are finished
     l_add(n_finished_threads,1);
+    if(n_finished_threads == n_active_searchers)
+        l_set(n_batch_total,0);
     while (n_finished_threads > 0 && n_finished_threads < n_active_searchers) {
         t_sleep(1);
     }
