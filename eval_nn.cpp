@@ -90,7 +90,7 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
 
     /*setenv variables*/
 #ifdef _WIN32
-    SetEnvironmentVariable((LPCWSTR)"TF_CPP_MIN_LOG_LEVEL",(LPCWSTR)"3");
+    SetEnvironmentVariable((LPCSTR)"TF_CPP_MIN_LOG_LEVEL",(LPCSTR)"3");
 #else
     setenv("TF_CPP_MIN_LOG_LEVEL","3",1);
 #endif
@@ -196,18 +196,18 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     //choose batch id
     int batch_id;
     l_lock(searcher_lock);
-    while(true) {
-        batch_id = chosen_device++;
-        if(chosen_device == N_DEVICES)
-            chosen_device = 0;
+    for(batch_id = chosen_device;batch_id < N_DEVICES; batch_id++) {
         if(input_map[batch_id].n_batch_i < BATCH_SIZE) {
             input_map[batch_id].n_batch_i++;
             n_batch_total++;
             break;
         }
-    };
+    }
+    chosen_device = batch_id + 1;
+    if(chosen_device == N_DEVICES)
+        chosen_device = 0;
     l_unlock(searcher_lock);
-    
+
     //get identifier
     InputData& inp = input_map[batch_id];
 
@@ -218,7 +218,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     if(offset + 1 < BATCH_SIZE) {
 
         while(inp.n_batch) {
-            t_sleep(1);
+            t_sleep(0);
 
             if(offset + 1 == inp.n_batch
                && n_active_searchers < n_searchers 
@@ -236,15 +236,20 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
         }
 
     } else {
+        while(n_batch_total < n_active_searchers)
+            t_sleep(0);
         probe_neural_network_batch(inp.scores,batch_id);
     }
 
     //Wait untill all eval calls are finished
     l_add(n_finished_threads,1);
-    if(n_finished_threads == n_active_searchers)
+    if(n_finished_threads == n_active_searchers) {
         l_set(n_batch_total,0);
-    while (n_finished_threads > 0 && n_finished_threads < n_active_searchers) {
-        t_sleep(1);
+        l_set(chosen_device,0);
+    }
+    while (n_finished_threads > 0 && 
+        n_finished_threads < n_active_searchers) {
+        t_sleep(0);
     }
     l_set(n_finished_threads,0);
 

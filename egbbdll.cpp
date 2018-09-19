@@ -230,7 +230,7 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
     }
     strcpy(EGBB::path,path);
     
-    printf("EgbbProbe 4.1 by Daniel Shawul\n");
+    printf("EgbbProbe 4.2 by Daniel Shawul\n");
     fflush(stdout);
 
     atexit(unload_egbb);
