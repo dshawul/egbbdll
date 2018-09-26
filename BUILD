@@ -1,7 +1,7 @@
 load("//tensorflow:tensorflow.bzl", "tf_cc_shared_object")
 
 tf_cc_shared_object(
-    name = "egbbdll.so",
+    name = "egbbdll64.dll",
     srcs = [
 	"cache.cpp",
 	"codec.cpp",
