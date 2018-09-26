@@ -79,6 +79,10 @@ static Status LoadGraph(const string& graph_file_name, Session** session, int de
     return Status::OK();
 }
 
+#ifdef _WIN32
+#   define setenv(n,v,o) _putenv_s(n,v)
+#endif
+
 /*
    Initialize tensorflow
 */
@@ -89,11 +93,7 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
     fflush(stdout);
 
     /*setenv variables*/
-#ifdef _WIN32
-    SetEnvironmentVariable((LPCSTR)"TF_CPP_MIN_LOG_LEVEL",(LPCSTR)"3");
-#else
     setenv("TF_CPP_MIN_LOG_LEVEL","3",1);
-#endif
 
     /*Load NN on GPUs*/
     N_DEVICES = n_devices;

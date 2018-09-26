@@ -13,10 +13,15 @@ DEFINES =
 
 #DEFINES += -DBIGENDIAN
 
-############################
+#########################################
 # USE tensorflow NN lib
-############################
+#  USE_TF      1 = tensorlow_cc
+#              2 = bazel built tensorflow
+#  USE_SHARED  0 = static linking to tensorflow
+#              1 = shared linking to tensorflow
+########################################
 USE_TF = 2
+USE_SHARED = 1
 
 ifneq ($(USE_TF),0)
 	DEFINES += -DTENSORFLOW
@@ -36,29 +41,45 @@ endif
 #######################
 
 ifeq ($(USE_TF),1)
-TF_DIR=/usr/local
-TF_DIR_INC=$(TF_DIR)/include/tensorflow
-TF_DIR_LIB=$(TF_DIR)/lib/tensorflow_cc
+    TF_DIR=/usr/local
+    TF_DIR_INC=$(TF_DIR)/include/tensorflow
+    TF_DIR_LIB=$(TF_DIR)/lib/tensorflow_cc
 else ifeq ($(USE_TF),2) 
-TF_DIR_INC=/home/dabdi/stests/vals/tensorflow
-TF_DIR_LIB=$(TF_DIR_INC)/bazel-bin/tensorflow
+    TF_DIR=/home/daniel/tensorflow
+    TF_DIR_INC=$(TF_DIR)
+    TF_DIR_LIB=$(TF_DIR)/bazel-bin/tensorflow
 endif
 
 TF_INC =-I$(TF_DIR_INC)
-TF_INC+=-I$(TF_DIR_INC)/bazel-genfiles
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/downloads
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/downloads/eigen
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/downloads/gemmlowp
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/downloads/nsync/public
 TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/protobuf-host/include
 
-TF_LIB = -Wl,-rpath=$(TF_DIR_LIB) 
-TF_LIB += $(TF_DIR_LIB)/libtensorflow_cc.so 
+ifeq ($(USE_SHARED),1)
+    TF_INC+=-I$(TF_DIR_INC)/bazel-genfiles
+
+    TF_LIB = -Wl,-rpath=$(TF_DIR_LIB) 
+    TF_LIB += $(TF_DIR_LIB)/libtensorflow_cc.so 
+else
+    TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/host_obj
+    TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/proto
+    TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/proto_text
+
+    ifeq ($(USE_TF),1)
+        TF_LIB = $(TF_DIR_LIB)/nsync.a
+        TF_LIB += -Wl,--whole-archive ${TF_DIR_LIB}/libtensorflow-core.a -Wl,--no-whole-archive
+    else ifeq ($(USE_TF),2)
+        TF_LIB = $(TF_DIR_INC)/tensorflow/contrib/makefile/downloads/nsync/builds/default.linux.c++11/nsync.a
+        TF_LIB += -Wl,--whole-archive ${TF_DIR_INC}/tensorflow/contrib/makefile/gen/lib/libtensorflow-core.a -Wl,--no-whole-archive
+    endif
+endif
 
 ifeq ($(USE_TF),1)
-TF_LIB += $(TF_DIR_LIB)/libprotobuf.a
+    TF_LIB += $(TF_DIR_LIB)/libprotobuf.a
 else ifeq ($(USE_TF),2)
-TF_LIB += $(TF_DIR_INC)/tensorflow/contrib/makefile/gen/protobuf-host/lib/libprotobuf.a
+    TF_LIB += $(TF_DIR_INC)/tensorflow/contrib/makefile/gen/protobuf-host/lib/libprotobuf.a
 endif
 
 ifneq ($(USE_TF),0)
