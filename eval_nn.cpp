@@ -24,6 +24,7 @@ static VOLATILE int n_active_searchers;
 static VOLATILE int n_finished_threads;
 static VOLATILE int n_batch_total = 0;
 static VOLATILE int chosen_device = 0;
+static int delayms = 0;
 
 struct InputData {
     Tensor* main_input;
@@ -86,7 +87,7 @@ static Status LoadGraph(const string& graph_file_name, Session** session, int de
 /*
    Initialize tensorflow
 */
-DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_devices, int dev_type) {
+DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_devices, int dev_type, int delay) {
 
     /*Message*/
     printf("Loading neural network ...\n");
@@ -94,6 +95,8 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
 
     /*setenv variables*/
     setenv("TF_CPP_MIN_LOG_LEVEL","3",1);
+
+    delayms = delay;
 
     /*Load NN on GPUs*/
     N_DEVICES = n_devices;
@@ -183,13 +186,20 @@ DLLExport void CDECL probe_neural_network_batch(int* scores, int batch_id) {
         scores[i] = logit(p);
     }
 
-    l_set(inp.n_batch,0);
-    l_set(inp.n_batch_i,0);
+    l_lock(searcher_lock);
+    inp.n_batch = 0;
+    inp.n_batch_i = 0;
+    l_unlock(searcher_lock);
 }
 
 /*
    Evaluate position using NN
 */
+
+#define SLEEP() {     \
+    t_yield();        \
+    t_sleep(delayms); \
+}
 
 DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
 
@@ -218,7 +228,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     if(offset + 1 < BATCH_SIZE) {
 
         while(inp.n_batch) {
-            t_sleep(0);
+            SLEEP();
 
             if(offset + 1 == inp.n_batch
                && n_active_searchers < n_searchers 
@@ -237,24 +247,29 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
 
     } else {
         while(n_batch_total < n_active_searchers)
-            t_sleep(0);
+            SLEEP();
         probe_neural_network_batch(inp.scores,batch_id);
     }
 
-    //Wait untill all eval calls are finished
-    l_add(n_finished_threads,1);
+    //Wait until all eval calls are finished
+    l_lock(searcher_lock);
+    n_finished_threads++;
     if(n_finished_threads == n_active_searchers) {
-        l_set(n_batch_total,0);
-        l_set(chosen_device,0);
-    }
+        n_batch_total = 0;
+        chosen_device = 0;
+        n_finished_threads = 0;
+    } 
+    l_unlock(searcher_lock);
+
     while (n_finished_threads > 0 && 
-        n_finished_threads < n_active_searchers) {
-        t_sleep(0);
+        n_finished_threads < n_batch_total) {
+        SLEEP();
     }
-    l_set(n_finished_threads,0);
 
     return inp.scores[offset];
 }
+
+#undef SLEEP
 
 /*
    Set number of active workers
