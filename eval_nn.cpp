@@ -1,21 +1,26 @@
-#ifdef TENSORFLOW
 #include <vector>
+#include <math.h>
+#include <iostream>
 
+#ifdef TENSORFLOW
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/public/session.h"
 #include "tensorflow/core/graph/default_device.h"
+#endif
+
+#ifdef TRT
+#include <fstream>
+#include <string>
+#include "include/cuda_runtime_api.h"
+#include "include/NvInfer.h"
+#include "include/NvUffParser.h"
+#endif
 
 #include "common.h"
 #include "egbbdll.h"
 
-using namespace tensorflow;
-
-static Session** session;
-static const string main_input_layer = "main_input";
-static const string aux_input_layer = "aux_input";
-static const string output_layer = "value_0";
 static const int CHANNELS = 12;
-static const int PARAMS = 5;
+static const int NPARAMS = 5;
 
 static int N_DEVICES;
 static int BATCH_SIZE;
@@ -25,44 +30,86 @@ static VOLATILE int n_finished_threads;
 static VOLATILE int n_batch_total = 0;
 static VOLATILE int chosen_device = 0;
 static int delayms = 0;
+static int floatPrecision = 1;
 
-struct InputData {
-    Tensor* main_input;
-    Tensor* aux_input;
+/*
+   Convert winning percentage to centi-pawns
+*/
+static const double Kfactor = -log(10.0) / 400.0;
+
+static inline int logit(double p) {
+    if(p < 1e-15) p = 1e-15;
+    else if(p > 1 - 1e-15) p = 1 - 1e-15;
+    return int(log((1 - p) / p) / Kfactor);
+}
+
+/*
+  Network model
+*/
+class Model {
+public:
     int* scores;
     VOLATILE int n_batch;
     VOLATILE int n_batch_i;
- 
-    InputData() {
-        main_input = 0;
-        aux_input = 0;
-        scores = 0;
+    Model() {
+        scores = new int[BATCH_SIZE];
         n_batch = 0;
         n_batch_i = 0;
     }
-    void alloc() {
-        static const TensorShape main_input_shape({BATCH_SIZE, 8, 8, CHANNELS});
-        static const TensorShape aux_input_shape({BATCH_SIZE, PARAMS});
-        main_input = new Tensor(DT_FLOAT, main_input_shape);
-        aux_input = new Tensor(DT_FLOAT, aux_input_shape);
-        scores = new int[BATCH_SIZE];
+    ~Model() {
+        delete[] scores;
+    }
+    virtual float* get_main_input() = 0;
+    virtual float* get_aux_input() = 0;
+    virtual void predict() = 0;
+    virtual void LoadGraph(const string&, int, int) = 0;
+};
+
+static Model** netModel;
+
+/*
+  TensorFlow model
+*/
+#ifdef TENSORFLOW
+
+using namespace tensorflow;
+
+class TfModel : public Model {
+    Tensor* main_input;
+    Tensor* aux_input;
+    Session* session;
+public:
+    TfModel();
+    ~TfModel();
+    void LoadGraph(const string& graph_file_name, int dev_id, int dev_type);
+    void predict();
+    float* get_main_input() {
+        return (float*)(main_input->tensor_data().data());
+    }
+    float* get_aux_input() {
+        return (float*)(aux_input->tensor_data().data());
     }
 };
 
-static std::map<int,InputData> input_map;
+static const string main_input_layer = "main_input";
+static const string aux_input_layer = "aux_input";
+static const string output_layer = "value_0";
 
-/*
-   Load NN
-*/
-static Status LoadGraph(const string& graph_file_name, Session** session, int dev_id, int dev_type) {
+TfModel::TfModel() : Model() {
+    static const TensorShape main_input_shape({BATCH_SIZE, 8, 8, CHANNELS});
+    static const TensorShape aux_input_shape({BATCH_SIZE, NPARAMS});
+    main_input = new Tensor(DT_FLOAT, main_input_shape);
+    aux_input = new Tensor(DT_FLOAT, aux_input_shape);
+}
+TfModel::~TfModel() {
+    delete main_input;
+    delete aux_input;
+}
+void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type) {
 
     GraphDef graph_def;
     Status load_graph_status =
         ReadBinaryProto(Env::Default(), graph_file_name, &graph_def);
-    if (!load_graph_status.ok()) {
-        return errors::NotFound("Failed to load compute graph at '",
-                graph_file_name, "'");
-    }
 
     std::string dev_name = ((dev_type == GPU) ? "/gpu:" : "/cpu:") + std::to_string(dev_id);
     graph::SetDefaultDevice(dev_name, &graph_def);
@@ -70,18 +117,151 @@ static Status LoadGraph(const string& graph_file_name, Session** session, int de
     fflush(stdout);
 
     SessionOptions options;
-    Status status = NewSession(options, session);
-    Status session_create_status = (*session)->Create(graph_def);
-
-    if (!session_create_status.ok()) {
-        return session_create_status;
-    }
-
-    return Status::OK();
+    Status status = NewSession(options, &session);
+    session->Create(graph_def);
+    
 }
 
-#ifdef _WIN32
-#   define setenv(n,v,o) _putenv_s(n,v)
+void TfModel::predict() {
+    std::vector<Tensor> outputs;
+
+    std::vector<std::pair<string, Tensor> > inputs = {
+        {main_input_layer, *main_input},
+        {aux_input_layer, *aux_input}
+    };
+
+    TF_CHECK_OK( session->Run(inputs, {output_layer}, {}, &outputs) );
+
+    for(int i = 0;i < BATCH_SIZE; i++) {
+        float p = outputs[0].flat<float>()(i);
+        scores[i] = logit(p);
+    }
+}
+#endif
+
+/*
+  TensorRT model
+*/
+#ifdef TRT
+
+using namespace nvuffparser;
+using namespace nvinfer1;
+
+class Logger : public ILogger {
+    void log(Severity severity, const char* msg) override {
+        if (severity != Severity::kINFO)
+            std::cout << msg << std::endl;
+    }
+};
+
+class TrtModel : public Model {
+    ICudaEngine* engine;
+    IExecutionContext* context;
+    IUffParser* parser;
+    Logger logger;
+    int numBindings;
+    nvinfer1::DataType floatMode;
+    std::vector<void*> buffers;
+    float* main_input;
+    float* aux_input;
+    float* output;
+public:
+    TrtModel();
+    ~TrtModel();
+    void LoadGraph(const string& uff_file_name, int dev_id, int dev_type);
+    void predict();
+    float* get_main_input() {
+        return main_input;
+    }
+    float* get_aux_input() {
+        return aux_input;
+    }
+};
+
+TrtModel::TrtModel() : Model() {
+    parser = createUffParser();
+    parser->registerInput("main_input", nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNHWC);
+    parser->registerInput("aux_input", nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNHWC);
+    parser->registerOutput("value/Sigmoid");
+    context = 0;
+    engine = 0;
+    numBindings = 0;
+    if(floatPrecision == 0)
+        floatMode = nvinfer1::DataType::kFLOAT;
+    else if(floatPrecision == 1)
+        floatMode = nvinfer1::DataType::kHALF;
+    else
+        floatMode = nvinfer1::DataType::kINT8;
+    main_input = new float[BATCH_SIZE * 8 * 8 * CHANNELS];
+    aux_input = new float[BATCH_SIZE * NPARAMS];
+    output = new float[BATCH_SIZE];
+}
+
+TrtModel::~TrtModel() {
+    context->destroy();
+    engine->destroy();
+    delete[] main_input;
+    delete[] aux_input;
+    delete[] output;
+}
+
+void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) {
+    std::string dev_name = ((dev_type == GPU) ? "/gpu:" : "/cpu:") + std::to_string(dev_id);
+    printf("Loading graph on %s\n",dev_name.c_str());
+    fflush(stdout);
+
+    cudaSetDevice(dev_id);
+
+    IBuilder* builder = createInferBuilder(logger);
+    INetworkDefinition* network = builder->createNetwork();
+    if(!parser->parse(uff_file_name.c_str(), *network, floatMode)) {
+        std::cout << "Fail to parse network " << uff_file_name << std::endl;;
+        return;
+    }     
+    if (floatMode == nvinfer1::DataType::kHALF) {
+        builder->setHalf2Mode(true);
+    } else if (floatMode == nvinfer1::DataType::kINT8) {
+        builder->setInt8Mode(true);
+    }
+    builder->setMaxBatchSize(BATCH_SIZE);
+    builder->setMaxWorkspaceSize((1 << 30));
+    engine = builder->buildCudaEngine(*network);
+    if (!engine) {
+        std::cout << "Unable to create engine" << std::endl;
+        return;
+    }
+    network->destroy();
+    builder->destroy();
+    parser->destroy();
+
+    context = engine->createExecutionContext();
+    numBindings = engine->getNbBindings();
+    
+    /*prepare buffer*/
+    for(int i = 0; i < numBindings; i++) {
+        Dims d = engine->getBindingDimensions(i);
+        size_t size = 1;
+        for(size_t i = 0; i < d.nbDims; i++) 
+            size*= d.d[i];
+
+        void* buf;
+        cudaMalloc(&buf, BATCH_SIZE * size * sizeof(float));
+        buffers.push_back(buf);
+    }
+}
+void TrtModel::predict() {
+
+    cudaMemcpy(buffers[0], main_input, BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
+    cudaMemcpy(buffers[1], aux_input, BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
+
+    context->execute(BATCH_SIZE, buffers.data());
+
+    cudaMemcpy(output, buffers[2], BATCH_SIZE * sizeof(float), cudaMemcpyDeviceToHost);
+
+    for(int i = 0;i < BATCH_SIZE;i++)
+        scores[i] = logit(output[i]);
+}
+
 #endif
 
 /*
@@ -90,40 +270,56 @@ static Status LoadGraph(const string& graph_file_name, Session** session, int de
 DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_devices, int dev_type, int delay) {
 
     /*Message*/
-    printf("Loading neural network ...\n");
+    printf("Loading neural network : %s\n",path);
     fflush(stdout);
 
+#ifdef _WIN32
+#   define setenv(n,v,o) _putenv_s(n,v)
+#endif
+
     /*setenv variables*/
+#ifdef TENSORFLOW
     setenv("TF_CPP_MIN_LOG_LEVEL","3",1);
+#endif
 
     delayms = delay;
-
-    /*Load NN on GPUs*/
-    N_DEVICES = n_devices;
-    session = new Session*[N_DEVICES];
-    for(int dev_id = 0; dev_id < N_DEVICES; dev_id++) {
-        TF_CHECK_OK( LoadGraph(path, &session[dev_id], dev_id, dev_type) );
-    }
-
-    /*Initialize tensors*/
     n_searchers = n_threads;
+    N_DEVICES = n_devices;
     n_active_searchers = n_searchers;
     BATCH_SIZE = n_searchers / N_DEVICES;
-    for(int i = 0;i < N_DEVICES;i++) {
-        InputData& inp = input_map[i];
-        inp.alloc();
+
+    /*Load tensorflow or tensorrt graphs on GPU*/
+    netModel = new Model*[N_DEVICES];
+
+#if defined(TENSORFLOW) && defined(TRT)
+    if(strstr(path, ".pb") != NULL) {
+        for(int i = 0; i < N_DEVICES; i++)
+            netModel[i] = new TfModel;
+    } else if(strstr(path, ".uff") != NULL) {
+        for(int i = 0; i < N_DEVICES; i++)
+            netModel[i] = new TrtModel;
     }
+#elif defined(TENSORFLOW)
+    for(int i = 0; i < N_DEVICES; i++)
+        netModel[i] = new TfModel;
+#elif defined(TRT)
+    for(int i = 0; i < N_DEVICES; i++)
+        netModel[i] = new TrtModel;
+#endif
+
+    for(int dev_id = 0; dev_id < N_DEVICES; dev_id++)
+        netModel[dev_id]->LoadGraph(path, dev_id, dev_type);
 
     /*warm up nn*/
     n_finished_threads = 0;
     n_batch_total = 0;
     for(int dev_id = 0; dev_id < N_DEVICES; dev_id++) {
         int piece = _EMPTY, square = _EMPTY;
-        InputData& inp = input_map[dev_id];
+        Model* net = netModel[dev_id];
         for(int i = 0;i < BATCH_SIZE;i++)
             add_to_batch(0, &piece, &square, dev_id);
-        inp.n_batch_i = inp.n_batch;
-        probe_neural_network_batch(inp.scores, dev_id);
+        net->n_batch_i = net->n_batch;
+        probe_neural_network_batch(net->scores, dev_id);
     }
     n_finished_threads = 0;
     n_batch_total = 0;
@@ -139,18 +335,18 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
 static void fill_input_planes(int player, int* piece,int* square, float* data, float* adata);
 
 DLLExport int CDECL add_to_batch(int player, int* piece, int* square, int batch_id) {
-    
+
     //get identifier
-    InputData& inp = input_map[batch_id];
+    Model* net = netModel[batch_id];
 
     //input
-    float* minput = (float*)(inp.main_input->tensor_data().data());
-    float* ainput = (float*)(inp.aux_input->tensor_data().data());
+    float* minput = net->get_main_input();
+    float* ainput = net->get_aux_input();
 
     //offsets
-    int offset = l_add(inp.n_batch,1);
+    int offset = l_add(net->n_batch,1);
     minput += offset * (8 * 8 * CHANNELS);
-    ainput += offset * (PARAMS);
+    ainput += offset * (NPARAMS);
 
     //fill planes
     fill_input_planes(player, piece, square, minput, ainput);
@@ -167,28 +363,13 @@ static inline int logit(double p);
 DLLExport void CDECL probe_neural_network_batch(int* scores, int batch_id) {
 
     //get identifier
-    InputData& inp = input_map[batch_id];
+    Model* net = netModel[batch_id];
 
-    //outputs
-    std::vector<Tensor> outputs;
-
-    //run session
-    std::vector<std::pair<string, Tensor> > inputs = {
-        {main_input_layer, *inp.main_input},
-        {aux_input_layer,  *inp.aux_input}
-    };
-
-    TF_CHECK_OK( session[batch_id]->Run(inputs, {output_layer}, {}, &outputs) );
-
-    //extract and return score in centi-pawns
-    for(int i = 0;i < inp.n_batch; i++) {
-        float p = outputs[0].flat<float>()(i);
-        scores[i] = logit(p);
-    }
+    net->predict();
 
     l_lock(searcher_lock);
-    inp.n_batch = 0;
-    inp.n_batch_i = 0;
+    net->n_batch = 0;
+    net->n_batch_i = 0;
     l_unlock(searcher_lock);
 }
 
@@ -207,8 +388,8 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     int batch_id;
     l_lock(searcher_lock);
     for(batch_id = chosen_device;batch_id < N_DEVICES; batch_id++) {
-        if(input_map[batch_id].n_batch_i < BATCH_SIZE) {
-            input_map[batch_id].n_batch_i++;
+        if(netModel[batch_id]->n_batch_i < BATCH_SIZE) {
+            netModel[batch_id]->n_batch_i++;
             n_batch_total++;
             break;
         }
@@ -219,7 +400,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     l_unlock(searcher_lock);
 
     //get identifier
-    InputData& inp = input_map[batch_id];
+    Model* net = netModel[batch_id];
 
     //add to batch
     int offset = add_to_batch(player,piece,square,batch_id);
@@ -227,20 +408,20 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     //pause threads till eval completes
     if(offset + 1 < BATCH_SIZE) {
 
-        while(inp.n_batch) {
+        while(net->n_batch) {
             SLEEP();
 
-            if(offset + 1 == inp.n_batch
+            if(offset + 1 == net->n_batch
                && n_active_searchers < n_searchers 
                && n_batch_total >= n_active_searchers
                ) {
 #if 0
                     printf("\n# batchsize %d / %d totalbatch %d workers %d / %d\n",
-                        inp.n_batch,BATCH_SIZE,n_batch_total,
+                        net->n_batch,BATCH_SIZE,n_batch_total,
                         n_active_searchers, n_searchers);
                     fflush(stdout);
 #endif
-                probe_neural_network_batch(inp.scores,batch_id);
+                probe_neural_network_batch(net->scores,batch_id);
                 break;
             }
         }
@@ -248,7 +429,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     } else {
         while(n_batch_total < n_active_searchers)
             SLEEP();
-        probe_neural_network_batch(inp.scores,batch_id);
+        probe_neural_network_batch(net->scores,batch_id);
     }
 
     //Wait until all eval calls are finished
@@ -266,7 +447,7 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
         SLEEP();
     }
 
-    return inp.scores[offset];
+    return net->scores[offset];
 }
 
 #undef SLEEP
@@ -279,17 +460,6 @@ DLLExport void CDECL set_num_active_searchers(int n_searchers) {
 }
 
 /*
-   Convert winning percentage to centi-pawns
-*/
-static const double Kfactor = -log(10.0) / 400.0;
-
-static inline int logit(double p) {
-    if(p < 1e-15) p = 1e-15;
-    else if(p > 1 - 1e-15) p = 1 - 1e-15;
-    return int(log((1 - p) / p) / Kfactor);
-}
-
-/*
    Fill input planes
 */
 static void fill_input_planes(int player, int* piece,int* square, float* data, float* adata) {
@@ -299,7 +469,7 @@ static void fill_input_planes(int player, int* piece,int* square, float* data, f
     /*zero board*/
     memset(board, 0, sizeof(int) * 128);
     memset(data,  0, sizeof(float) * 8 * 8 * CHANNELS);
-    memset(adata, 0, sizeof(float) * PARAMS);
+    memset(adata, 0, sizeof(float) * NPARAMS);
 
     /*fill board*/
     int ksq = SQ6488(square[player]);
@@ -457,4 +627,4 @@ static void fill_input_planes(int player, int* piece,int* square, float* data, f
 #undef D
 
 }
-#endif
+

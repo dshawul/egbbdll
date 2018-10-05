@@ -21,30 +21,36 @@ DEFINES =
 #              1 = shared linking to tensorflow
 ########################################
 USE_TF = 2
+USE_TRT = 0
 USE_SHARED = 1
 
 ifneq ($(USE_TF),0)
-	DEFINES += -DTENSORFLOW
+    DEFINES += -DTENSORFLOW
+endif
+
+ifneq ($(USE_TRT),0)
+    DEFINES += -DTRT
 endif
 ############################
 # Target so and files
 ############################
 EXE = egbbso64.so
 RM = rm -rf
-OBJ = egbbdll.o moves.o index.o decompress.o codec.o cache.o
-ifneq ($(USE_TF),0)
-	OBJ += eval_nn.o
-endif
+OBJ = egbbdll.o moves.o index.o decompress.o codec.o cache.o eval_nn.o
 
+TF_LIB=
+TF_INC=
 #######################
 #  TensorFlow
 #######################
+
+ifneq ($(USE_TF),0)
 
 ifeq ($(USE_TF),1)
     TF_DIR=/usr/local
     TF_DIR_INC=$(TF_DIR)/include/tensorflow
     TF_DIR_LIB=$(TF_DIR)/lib/tensorflow_cc
-else ifeq ($(USE_TF),2) 
+else
     TF_DIR=/home/daniel/tensorflow
     TF_DIR_INC=$(TF_DIR)
     TF_DIR_LIB=$(TF_DIR)/bazel-bin/tensorflow
@@ -59,7 +65,6 @@ TF_INC+=-I$(TF_DIR_INC)/tensorflow/contrib/makefile/gen/protobuf-host/include
 
 ifeq ($(USE_SHARED),1)
     TF_INC+=-I$(TF_DIR_INC)/bazel-genfiles
-
     TF_LIB = -Wl,-rpath=$(TF_DIR_LIB) 
     TF_LIB += $(TF_DIR_LIB)/libtensorflow_cc.so 
 else
@@ -70,7 +75,7 @@ else
     ifeq ($(USE_TF),1)
         TF_LIB = $(TF_DIR_LIB)/nsync.a
         TF_LIB += -Wl,--whole-archive ${TF_DIR_LIB}/libtensorflow-core.a -Wl,--no-whole-archive
-    else ifeq ($(USE_TF),2)
+    else
         TF_LIB = $(TF_DIR_INC)/tensorflow/contrib/makefile/downloads/nsync/builds/default.linux.c++11/nsync.a
         TF_LIB += -Wl,--whole-archive ${TF_DIR_INC}/tensorflow/contrib/makefile/gen/lib/libtensorflow-core.a -Wl,--no-whole-archive
     endif
@@ -82,8 +87,26 @@ else ifeq ($(USE_TF),2)
     TF_LIB += $(TF_DIR_INC)/tensorflow/contrib/makefile/gen/protobuf-host/lib/libprotobuf.a
 endif
 
-ifneq ($(USE_TF),0)
-	LDFLAGS += $(TF_LIB)
+LDFLAGS += $(TF_LIB)
+
+endif
+
+######################
+#  TensorRT
+#######################
+
+ifneq ($(USE_TRT),0)
+
+TRT_DIR = /home/daniel/TensorRT-5.0.0.10
+CUDA_DIR = /usr/local/cuda
+TF_INC += -I$(TRT_DIR)
+TF_INC += -I$(CUDA_DIR)
+TF_LIB += -Wl,-rpath=$(TRT_DIR)/lib
+TF_LIB += $(TRT_DIR)/lib/libnvinfer.so
+TF_LIB += $(TRT_DIR)/lib/libnvparsers.so
+
+LDFLAGS += $(TF_LIB)
+
 endif
 
 ######################
