@@ -271,7 +271,7 @@ void TrtModel::predict() {
 /*
    Initialize tensorflow
 */
-DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_devices, int dev_type, int delay) {
+DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_devices, int dev_type, int delay, int float_type) {
 
     /*Message*/
     printf("Loading neural network : %s\n",path);
@@ -291,7 +291,8 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
     N_DEVICES = n_devices;
     n_active_searchers = n_searchers;
     BATCH_SIZE = n_searchers / N_DEVICES;
-
+    floatPrecision = float_type;
+    
     /*Load tensorflow or tensorrt graphs on GPU*/
     netModel = new Model*[N_DEVICES];
 
