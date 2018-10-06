@@ -51,10 +51,12 @@ public:
     int* scores;
     VOLATILE int n_batch;
     VOLATILE int n_batch_i;
+    int id;
     Model() {
         scores = new int[BATCH_SIZE];
         n_batch = 0;
         n_batch_i = 0;
+        id = 0;
     }
     ~Model() {
         delete[] scores;
@@ -106,6 +108,7 @@ TfModel::~TfModel() {
     delete aux_input;
 }
 void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type) {
+    Model::id = dev_id;
 
     GraphDef graph_def;
     Status load_graph_status =
@@ -118,8 +121,7 @@ void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type)
 
     SessionOptions options;
     Status status = NewSession(options, &session);
-    session->Create(graph_def);
-    
+    session->Create(graph_def);    
 }
 
 void TfModel::predict() {
@@ -210,7 +212,8 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
     printf("Loading graph on %s\n",dev_name.c_str());
     fflush(stdout);
 
-    cudaSetDevice(dev_id);
+    Model::id = dev_id;
+    cudaSetDevice(Model::id);
 
     IBuilder* builder = createInferBuilder(logger);
     INetworkDefinition* network = builder->createNetwork();
@@ -250,6 +253,7 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
     }
 }
 void TrtModel::predict() {
+    cudaSetDevice(Model::id);
 
     cudaMemcpy(buffers[0], main_input, BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
     cudaMemcpy(buffers[1], aux_input, BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
