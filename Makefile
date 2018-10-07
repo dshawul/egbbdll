@@ -1,3 +1,32 @@
+#########################################
+# USE tensorflow NN lib
+#  USE_TF      0 = Don't use tensorflow
+#              1 = tensorlow_cc
+#              2 = manually built tensorflow
+#  USE_TRT     0 = Don't use TensorRT
+#              1 = Use TensorRT
+#  USE_SHARED  0 = static linking if possible
+#              1 = dynamic linking to TF/TRT
+########################################
+USE_TF = 2
+USE_TRT = 0
+USE_SHARED = 1
+
+########################################
+# Set directories to dependenies
+########################################
+
+ifeq ($(USE_TF),1)
+    TF_DIR=/usr/local
+else ifeq ($(USE_TF),2)
+    TF_DIR=/home/daniel/tensorflow
+endif
+
+ifneq ($(USE_TRT),0)
+    TRT_DIR = /home/daniel/TensorRT-5.0.0.10
+    CUDA_DIR = /usr/local/cuda
+endif
+
 ############################
 # Choose compiler and flags
 ############################
@@ -13,17 +42,6 @@ DEFINES =
 
 #DEFINES += -DBIGENDIAN
 
-#########################################
-# USE tensorflow NN lib
-#  USE_TF      1 = tensorlow_cc
-#              2 = bazel built tensorflow
-#  USE_SHARED  0 = static linking to tensorflow
-#              1 = shared linking to tensorflow
-########################################
-USE_TF = 2
-USE_TRT = 0
-USE_SHARED = 1
-
 ifneq ($(USE_TF),0)
     DEFINES += -DTENSORFLOW
 endif
@@ -31,6 +49,7 @@ endif
 ifneq ($(USE_TRT),0)
     DEFINES += -DTRT
 endif
+
 ############################
 # Target so and files
 ############################
@@ -47,11 +66,9 @@ TF_INC=
 ifneq ($(USE_TF),0)
 
 ifeq ($(USE_TF),1)
-    TF_DIR=/usr/local
     TF_DIR_INC=$(TF_DIR)/include/tensorflow
     TF_DIR_LIB=$(TF_DIR)/lib/tensorflow_cc
 else
-    TF_DIR=/home/daniel/tensorflow
     TF_DIR_INC=$(TF_DIR)
     TF_DIR_LIB=$(TF_DIR)/bazel-bin/tensorflow
 endif
@@ -97,8 +114,6 @@ endif
 
 ifneq ($(USE_TRT),0)
 
-TRT_DIR = /home/daniel/TensorRT-5.0.0.10
-CUDA_DIR = /usr/local/cuda
 TF_INC += -I$(TRT_DIR)
 TF_INC += -I$(CUDA_DIR)
 TF_LIB += -Wl,-rpath=$(TRT_DIR)/lib

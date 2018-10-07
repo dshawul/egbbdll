@@ -118,7 +118,12 @@ void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type)
     graph::SetDefaultDevice(dev_name, &graph_def);
     printf("Loading graph on %s\n",dev_name.c_str());
     fflush(stdout);
-
+#if 0
+    std::cout << "=============================" << std::endl;
+    for (auto &node: *graph_def.mutable_node())
+        std::cout << node.name() << std::endl;
+    std::cout << "=============================" << std::endl;
+#endif
     SessionOptions options;
     Status status = NewSession(options, &session);
     session->Create(graph_def);    
