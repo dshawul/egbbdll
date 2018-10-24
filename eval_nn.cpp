@@ -31,6 +31,7 @@ static VOLATILE int n_batch_total = 0;
 static VOLATILE int chosen_device = 0;
 static int delayms = 0;
 static int floatPrecision = 1;
+static bool is_trt = false;
 
 /*
    Convert winning percentage to centi-pawns
@@ -68,6 +69,9 @@ public:
 };
 
 static Model** netModel;
+static const string main_input_layer = "main_input";
+static const string aux_input_layer = "aux_input";
+static const string output_layer = "value/Sigmoid";
 
 /*
   TensorFlow model
@@ -93,10 +97,6 @@ public:
     }
 };
 
-static const string main_input_layer = "main_input";
-static const string aux_input_layer = "aux_input";
-static const string output_layer = "value_0";
-
 TfModel::TfModel() : Model() {
     static const TensorShape main_input_shape({BATCH_SIZE, 8, 8, CHANNELS});
     static const TensorShape aux_input_shape({BATCH_SIZE, NPARAMS});
@@ -118,12 +118,7 @@ void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type)
     graph::SetDefaultDevice(dev_name, &graph_def);
     printf("Loading graph on %s\n",dev_name.c_str());
     fflush(stdout);
-#if 0
-    std::cout << "=============================" << std::endl;
-    for (auto &node: *graph_def.mutable_node())
-        std::cout << node.name() << std::endl;
-    std::cout << "=============================" << std::endl;
-#endif
+
     SessionOptions options;
     Status status = NewSession(options, &session);
     session->Create(graph_def);    
@@ -187,9 +182,9 @@ public:
 
 TrtModel::TrtModel() : Model() {
     parser = createUffParser();
-    parser->registerInput("main_input", nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNHWC);
-    parser->registerInput("aux_input", nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNHWC);
-    parser->registerOutput("value/Sigmoid");
+    parser->registerInput(main_input_layer.c_str(), nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNCHW);
+    parser->registerInput(aux_input_layer.c_str(), nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNC);
+    parser->registerOutput(output_layer.c_str());
     context = 0;
     engine = 0;
     numBindings = 0;
@@ -300,7 +295,7 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
     
     /*Load tensorflow or tensorrt graphs on GPU*/
     netModel = new Model*[N_DEVICES];
-
+    is_trt = false;
 #if defined(TENSORFLOW) && defined(TRT)
     if(strstr(path, ".pb") != NULL) {
         for(int i = 0; i < N_DEVICES; i++)
@@ -308,6 +303,7 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
     } else if(strstr(path, ".uff") != NULL) {
         for(int i = 0; i < N_DEVICES; i++)
             netModel[i] = new TrtModel;
+        is_trt = true;
     }
 #elif defined(TENSORFLOW)
     for(int i = 0; i < N_DEVICES; i++)
@@ -315,6 +311,7 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
 #elif defined(TRT)
     for(int i = 0; i < N_DEVICES; i++)
         netModel[i] = new TrtModel;
+    is_trt = true;
 #endif
 
     for(int dev_id = 0; dev_id < N_DEVICES; dev_id++)
@@ -500,7 +497,9 @@ static void fill_input_planes(int player, int* piece,int* square, float* data, f
     /* 
        Add the attack map planes 
     */
-#define D(sq,C)     data[rank(sq) * 8 * CHANNELS + file(sq) * CHANNELS + C]
+#define DHWC(sq,C)     data[rank(sq) * 8 * CHANNELS + file(sq) * CHANNELS + C]
+#define DCHW(sq,C)     data[C * 8 * 8 + rank(sq) * 8 + file(sq)]
+#define D(sq,C)        ( is_trt ? DCHW(sq,C) : DHWC(sq,C) )
 
 #define NK_MOVES(dir, off) {                    \
         to = sq + dir;                          \
@@ -635,6 +634,4 @@ static void fill_input_planes(int player, int* piece,int* square, float* data, f
 #undef NK_MOVES
 #undef BRQ_MOVES
 #undef D
-
 }
-
