@@ -26,8 +26,6 @@ static int N_DEVICES;
 static int BATCH_SIZE;
 static int n_searchers;
 static VOLATILE int n_active_searchers;
-static VOLATILE int n_finished_threads;
-static VOLATILE int n_batch_total = 0;
 static VOLATILE int chosen_device = 0;
 static int delayms = 0;
 static int floatPrecision = 1;
@@ -50,14 +48,18 @@ static inline int logit(double p) {
 class Model {
 public:
     int* scores;
+    VOLATILE int wait;
     VOLATILE int n_batch;
     VOLATILE int n_batch_i;
+    VOLATILE int n_finished_threads;
     int id;
     Model() {
         scores = new int[BATCH_SIZE];
         n_batch = 0;
         n_batch_i = 0;
+        n_finished_threads = 0;
         id = 0;
+        wait = 1;
     }
     ~Model() {
         delete[] scores;
@@ -66,7 +68,11 @@ public:
     virtual float* get_aux_input() = 0;
     virtual void predict() = 0;
     virtual void LoadGraph(const string&, int, int) = 0;
+    static char path[256];
+    static int dev_type;
 };
+char Model::path[256];
+int Model::dev_type;
 
 static Model** netModel;
 static const string main_input_layer = "main_input";
@@ -269,6 +275,16 @@ void TrtModel::predict() {
 #endif
 
 /*
+  Thread procedure for loading NN
+*/
+static VOLATILE int nn_loaded = 0;
+static void CDECL nn_thread_proc(void* id) {
+    int dev_id = *((int*)id);
+    netModel[dev_id]->LoadGraph(Model::path, dev_id, Model::dev_type);
+    l_add(nn_loaded,1);
+}
+
+/*
    Initialize tensorflow
 */
 DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_devices, int dev_type, int delay, int float_type) {
@@ -314,22 +330,27 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
     is_trt = true;
 #endif
 
-    for(int dev_id = 0; dev_id < N_DEVICES; dev_id++)
-        netModel[dev_id]->LoadGraph(path, dev_id, dev_type);
+    /*Load NN with multiple threads*/
+    strcpy(Model::path, path);
+    Model::dev_type = dev_type;
+    int* tid = new int[N_DEVICES];
+    for(int dev_id = 0; dev_id < N_DEVICES; dev_id++) {
+        tid[dev_id] = dev_id;
+        t_create(nn_thread_proc,&tid[dev_id]);
+    }
+    while(nn_loaded < N_DEVICES)
+        t_sleep(1);
+	delete[] tid;
 
     /*warm up nn*/
-    n_finished_threads = 0;
-    n_batch_total = 0;
     for(int dev_id = 0; dev_id < N_DEVICES; dev_id++) {
         int piece = _EMPTY, square = _EMPTY;
         Model* net = netModel[dev_id];
         for(int i = 0;i < BATCH_SIZE;i++)
             add_to_batch(0, &piece, &square, dev_id);
-        net->n_batch_i = net->n_batch;
-        probe_neural_network_batch(net->scores, dev_id);
+        net->predict();
+        net->n_batch = 0;
     }
-    n_finished_threads = 0;
-    n_batch_total = 0;
 
     /*Message*/
     printf("Neural network loaded !\t\n");
@@ -361,25 +382,16 @@ DLLExport int CDECL add_to_batch(int player, int* piece, int* square, int batch_
     return offset;
 }
 
-/*
-   Do batch inference
-*/
-
-static inline int logit(double p);
-
 DLLExport void CDECL probe_neural_network_batch(int* scores, int batch_id) {
-
     //get identifier
     Model* net = netModel[batch_id];
 
+    //prediction
     net->predict();
 
-    l_lock(searcher_lock);
-    net->n_batch = 0;
-    net->n_batch_i = 0;
-    l_unlock(searcher_lock);
+    //copy result
+    memcpy(scores, net->scores, BATCH_SIZE * sizeof(int));
 }
-
 /*
    Evaluate position using NN
 */
@@ -394,13 +406,17 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     //choose batch id
     int batch_id;
     l_lock(searcher_lock);
-    for(batch_id = chosen_device;batch_id < N_DEVICES; batch_id++) {
-        if(netModel[batch_id]->n_batch_i < BATCH_SIZE) {
-            netModel[batch_id]->n_batch_i++;
-            n_batch_total++;
-            break;
+    do {
+        for(batch_id = chosen_device;batch_id < N_DEVICES; batch_id++) {
+            Model* net = netModel[batch_id];
+            if(net->n_batch_i < BATCH_SIZE) {
+                net->n_batch_i++;
+                break;
+            }
         }
-    }
+        chosen_device = 0;
+    } while(batch_id + 1 > N_DEVICES);
+
     chosen_device = batch_id + 1;
     if(chosen_device == N_DEVICES)
         chosen_device = 0;
@@ -415,42 +431,44 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     //pause threads till eval completes
     if(offset + 1 < BATCH_SIZE) {
 
-        while(net->n_batch) {
+        while(net->wait) {
             SLEEP();
 
             if(offset + 1 == net->n_batch
                && n_active_searchers < n_searchers 
-               && n_batch_total >= n_active_searchers
+               && net->n_batch >= BATCH_SIZE - (n_searchers - n_active_searchers)
                ) {
 #if 0
-                    printf("\n# batchsize %d / %d totalbatch %d workers %d / %d\n",
-                        net->n_batch,BATCH_SIZE,n_batch_total,
+                    printf("\n# batchsize %d / %d workers %d / %d\n",
+                        net->n_batch,BATCH_SIZE,
                         n_active_searchers, n_searchers);
                     fflush(stdout);
 #endif
-                probe_neural_network_batch(net->scores,batch_id);
+                net->predict();
+                net->wait = 0;
                 break;
             }
         }
 
     } else {
-        while(n_batch_total < n_active_searchers)
-            SLEEP();
-        probe_neural_network_batch(net->scores,batch_id);
+        net->predict();
+        net->wait = 0;
     }
 
     //Wait until all eval calls are finished
     l_lock(searcher_lock);
-    n_finished_threads++;
-    if(n_finished_threads == n_active_searchers) {
-        n_batch_total = 0;
-        chosen_device = 0;
-        n_finished_threads = 0;
+    net->n_finished_threads++;
+    if(net->n_finished_threads == net->n_batch) {
+        net->wait = 1;
+        net->n_finished_threads = 0;
+        net->n_batch = 0;
+        net->n_batch_i = 0;
     } 
     l_unlock(searcher_lock);
 
-    while (n_finished_threads > 0 && 
-        n_finished_threads < n_batch_total) {
+    while (net->n_finished_threads > 0 
+        && net->n_finished_threads < net->n_batch
+        ) {
         SLEEP();
     }
 
