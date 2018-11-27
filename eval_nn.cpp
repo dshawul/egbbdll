@@ -77,7 +77,7 @@ int Model::dev_type;
 static Model** netModel;
 static const string main_input_layer = "main_input";
 static const string aux_input_layer = "aux_input";
-static const string output_layer = "value/Sigmoid";
+static const string output_layer = "value/Softmax";
 
 /*
   TensorFlow model
@@ -140,8 +140,9 @@ void TfModel::predict() {
 
     TF_CHECK_OK( session->Run(inputs, {output_layer}, {}, &outputs) );
 
+    auto pp = outputs[0].matrix<float>();
     for(int i = 0;i < BATCH_SIZE; i++) {
-        float p = outputs[0].flat<float>()(i);
+        float p = pp(i,0) * 1.0 + pp(i,1) * 0.5;
         scores[i] = logit(p);
     }
 }
@@ -202,7 +203,7 @@ TrtModel::TrtModel() : Model() {
         floatMode = nvinfer1::DataType::kINT8;
     main_input = new float[BATCH_SIZE * 8 * 8 * CHANNELS];
     aux_input = new float[BATCH_SIZE * NPARAMS];
-    output = new float[BATCH_SIZE];
+    output = new float[BATCH_SIZE * 3];
 }
 
 TrtModel::~TrtModel() {
@@ -266,10 +267,12 @@ void TrtModel::predict() {
 
     context->execute(BATCH_SIZE, buffers.data());
 
-    cudaMemcpy(output, buffers[2], BATCH_SIZE * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(output, buffers[2], BATCH_SIZE * 3 * sizeof(float), cudaMemcpyDeviceToHost);
 
-    for(int i = 0;i < BATCH_SIZE;i++)
-        scores[i] = logit(output[i]);
+    for(int i = 0;i < BATCH_SIZE;i++) {
+        float p = output[3*i+0] * 1.0 + output[3*i+1] * 0.5;
+        scores[i] = logit(p);
+    }
 }
 
 #endif
