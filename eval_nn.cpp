@@ -19,7 +19,7 @@
 #include "common.h"
 #include "egbbdll.h"
 
-static const int CHANNELS = 12;
+static const int CHANNELS = 24;
 static const int NPARAMS = 5;
 
 static int N_DEVICES;
@@ -545,6 +545,7 @@ static void fill_input_planes(int player, int* piece,int* square, float* data, f
         }
         if(fliph) 
             sq = MIRRORF(sq);
+        D(sq,(pc+11)) = 1.0f;
 
         switch(pc) {
             case wking:
