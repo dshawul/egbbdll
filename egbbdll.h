@@ -33,10 +33,10 @@ DLLExport int  CDECL probe_egbb_xmen(int player, int* piece, int* square);
 DLLExport void CDECL load_egbb_xmen(char* path,int cache_size = 4194304,int load_options = LOAD_4MEN);
 /*NN eval*/
 DLLExport void CDECL set_num_active_searchers(int n_searchers);
-DLLExport int  CDECL add_to_batch(int player, int* piece, int* square, int batch_id = 0);
-DLLExport void CDECL probe_neural_network_batch(int* scores, int batch_id = 0);
-DLLExport int  CDECL probe_neural_network(int player, int* piece, int* square);
-DLLExport void CDECL load_neural_network(char* path, int n_threads = 1, int n_devices = 1, int dev_type = CPU, int delay = 0, int float_type = 1);
+DLLExport int  CDECL probe_neural_network(int player, int cast, int fifty, int hist, int* draw, int* piece, 
+										 int* square, int* moves = 0, int* probs = 0);
+DLLExport void CDECL load_neural_network(char* path, int n_threads = 1, int n_devices = 1, int dev_type = CPU, 
+                                         int delay = 0, int float_type = 1, int nn_type = 0);
 /*private*/
 DLLExport void CDECL load_egbb_into_ram(int side,int* piece);
 DLLExport void CDECL unload_egbb_from_ram(int side,int* piece);

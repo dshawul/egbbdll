@@ -19,8 +19,13 @@
 #include "common.h"
 #include "egbbdll.h"
 
-static const int CHANNELS = 24;
+static int CHANNELS;
 static const int NPARAMS = 5;
+static const int NPOLICY = 1858;
+static const string main_input_layer = "main_input";
+static const string aux_input_layer = "aux_input";
+static const string policy_layer = "policy_head";
+static string value_layer;
 
 static int N_DEVICES;
 static int BATCH_SIZE;
@@ -28,6 +33,7 @@ static int n_searchers;
 static VOLATILE int n_active_searchers;
 static VOLATILE int chosen_device = 0;
 static int delayms = 0;
+static int nn_type = 0;
 static int floatPrecision = 1;
 static bool is_trt = false;
 
@@ -36,10 +42,62 @@ static bool is_trt = false;
 */
 static const double Kfactor = -log(10.0) / 400.0;
 
+double logistic(double score) {
+    return 1 / (1 + exp(Kfactor * score));
+}
+
 static inline int logit(double p) {
     if(p < 1e-15) p = 1e-15;
     else if(p > 1 - 1e-15) p = 1 - 1e-15;
     return int(log((1 - p) / p) / Kfactor);
+}
+
+/*
+Move policy formact according to lczero
+*/
+static const int MOVE_TAB_SIZE = 64*64+8*3*3;
+
+static unsigned short move_index_table[MOVE_TAB_SIZE];
+
+static void init_index_table() {
+
+    memset(move_index_table, 0, MOVE_TAB_SIZE * sizeof(short));
+
+    int cnt = 0;
+
+    for(int from = 0; from < 64; from++) {
+
+        int from88 = SQ6488(from);
+        for(int to = 0; to < 64; to++) {
+            int to88 = SQ6488(to);
+            if(from != to) {
+                if(sqatt_pieces(to88 - from88))
+                    move_index_table[from * 64 + to] = cnt++;
+            }
+        }
+
+    }
+
+    for(int from = 48; from < 56; from++) {
+        int idx = 4096 + file64(from) * 9;
+
+        if(from > 48) {
+            move_index_table[idx+0] = cnt++;
+            move_index_table[idx+1] = cnt++;
+            move_index_table[idx+2] = cnt++;
+        }
+
+        move_index_table[idx+3] = cnt++;
+        move_index_table[idx+4] = cnt++;
+        move_index_table[idx+5] = cnt++;
+
+        if(from < 55) {
+            move_index_table[idx+6] = cnt++;
+            move_index_table[idx+7] = cnt++;
+            move_index_table[idx+8] = cnt++;
+        }
+    }
+
 }
 
 /*
@@ -48,6 +106,9 @@ static inline int logit(double p) {
 class Model {
 public:
     int* scores;
+    float* policy_scores;
+    int* policy_index;
+    int* policy_size;
     VOLATILE int wait;
     VOLATILE int n_batch;
     VOLATILE int n_batch_i;
@@ -55,6 +116,10 @@ public:
     int id;
     Model() {
         scores = new int[BATCH_SIZE];
+        policy_scores = new float[BATCH_SIZE * MAX_MOVES];
+        policy_index = new int[BATCH_SIZE * MAX_MOVES];
+        policy_size = new int[BATCH_SIZE];
+        memset(policy_size,0,BATCH_SIZE * sizeof(int));
         n_batch = 0;
         n_batch_i = 0;
         n_finished_threads = 0;
@@ -63,6 +128,9 @@ public:
     }
     ~Model() {
         delete[] scores;
+        delete[] policy_scores;
+        delete[] policy_index;
+        delete[] policy_size;
     }
     virtual float* get_main_input() = 0;
     virtual float* get_aux_input() = 0;
@@ -75,9 +143,6 @@ char Model::path[256];
 int Model::dev_type;
 
 static Model** netModel;
-static const string main_input_layer = "main_input";
-static const string aux_input_layer = "aux_input";
-static const string output_layer = "value/Softmax";
 
 /*
   TensorFlow model
@@ -104,10 +169,11 @@ public:
 };
 
 TfModel::TfModel() : Model() {
-    static const TensorShape main_input_shape({BATCH_SIZE, 8, 8, CHANNELS});
-    static const TensorShape aux_input_shape({BATCH_SIZE, NPARAMS});
-    main_input = new Tensor(DT_FLOAT, main_input_shape);
-    aux_input = new Tensor(DT_FLOAT, aux_input_shape);
+    if(nn_type == 0)
+        main_input = new Tensor(DT_FLOAT, {BATCH_SIZE, 8, 8, CHANNELS});
+    else
+        main_input = new Tensor(DT_FLOAT, {BATCH_SIZE, CHANNELS, 8, 8});
+    aux_input = new Tensor(DT_FLOAT, {BATCH_SIZE, NPARAMS});
 }
 TfModel::~TfModel() {
     delete main_input;
@@ -125,6 +191,13 @@ void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type)
     printf("Loading graph on %s\n",dev_name.c_str());
     fflush(stdout);
 
+#if 0
+    std::cout << "=============================" << std::endl;
+    for (auto &node: *graph_def.mutable_node())
+        std::cout << node.name() << std::endl;
+    std::cout << "=============================" << std::endl;
+#endif
+
     SessionOptions options;
     Status status = NewSession(options, &session);
     session->Create(graph_def);    
@@ -133,18 +206,40 @@ void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type)
 void TfModel::predict() {
     std::vector<Tensor> outputs;
 
-    std::vector<std::pair<string, Tensor> > inputs = {
-        {main_input_layer, *main_input},
-        {aux_input_layer, *aux_input}
-    };
+    if(nn_type == 0) {
+        std::vector<std::pair<string, Tensor> > inputs = {
+            {main_input_layer, *main_input},
+            {aux_input_layer, *aux_input}
+        };
 
-    TF_CHECK_OK( session->Run(inputs, {output_layer}, {}, &outputs) );
+        TF_CHECK_OK( session->Run(inputs, {value_layer}, {}, &outputs) );
 
-    auto pp = outputs[0].matrix<float>();
-    for(int i = 0;i < BATCH_SIZE; i++) {
-        float p = pp(i,0) * 1.0 + pp(i,1) * 0.5;
-        scores[i] = logit(p);
+        auto pp = outputs[0].matrix<float>();
+        for(int i = 0;i < n_batch; i++) {
+            float p = pp(i,0) * 1.0 + pp(i,1) * 0.5;
+            scores[i] = logit(p);
+        }
+    } else {
+        std::vector<std::pair<string, Tensor> > inputs = {
+            {main_input_layer, *main_input}
+        };
+
+        TF_CHECK_OK( session->Run(inputs, {value_layer,policy_layer}, {}, &outputs) );
+
+        auto pp0 = outputs[0].flat<float>();
+        auto pp1 = outputs[1].matrix<float>();
+        for(int i = 0;i < n_batch; i++) {
+            float p = (pp0(i) + 1.0) * 0.5;
+            scores[i] = logit(p);
+
+            for(int j = 0;j < policy_size[i];j++) {
+                int idx = policy_index[i * MAX_MOVES + j];
+                float p = pp1(i,idx);
+                policy_scores[i * MAX_MOVES + j] = p;
+            }
+        }
     }
+
 }
 #endif
 
@@ -171,9 +266,11 @@ class TrtModel : public Model {
     int numBindings;
     nvinfer1::DataType floatMode;
     std::vector<void*> buffers;
+    bool has_policy;
     float* main_input;
     float* aux_input;
-    float* output;
+    float* value;
+    float* policy;
 public:
     TrtModel();
     ~TrtModel();
@@ -189,9 +286,11 @@ public:
 
 TrtModel::TrtModel() : Model() {
     parser = createUffParser();
-    parser->registerInput(main_input_layer.c_str(), nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNCHW);
-    parser->registerInput(aux_input_layer.c_str(), nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNC);
-    parser->registerOutput(output_layer.c_str());
+    parser->registerInput(main_input_layer.c_str(), 
+        nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNCHW);
+    if(nn_type == 0)
+        parser->registerInput(aux_input_layer.c_str(), 
+            nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNC);
     context = 0;
     engine = 0;
     numBindings = 0;
@@ -203,7 +302,11 @@ TrtModel::TrtModel() : Model() {
         floatMode = nvinfer1::DataType::kINT8;
     main_input = new float[BATCH_SIZE * 8 * 8 * CHANNELS];
     aux_input = new float[BATCH_SIZE * NPARAMS];
-    output = new float[BATCH_SIZE * 3];
+    if(nn_type == 0)
+        value = new float[BATCH_SIZE * 3];
+    else
+        value = new float[BATCH_SIZE];
+    policy = new float[BATCH_SIZE * NPOLICY];
 }
 
 TrtModel::~TrtModel() {
@@ -211,7 +314,8 @@ TrtModel::~TrtModel() {
     engine->destroy();
     delete[] main_input;
     delete[] aux_input;
-    delete[] output;
+    delete[] value;
+    delete[] policy;
 }
 
 void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) {
@@ -249,29 +353,57 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
     
     /*prepare buffer*/
     for(int i = 0; i < numBindings; i++) {
+
         Dims d = engine->getBindingDimensions(i);
         size_t size = 1;
-        for(size_t i = 0; i < d.nbDims; i++) 
-            size*= d.d[i];
+        for(size_t j = 0; j < d.nbDims; j++) 
+            size*= d.d[j];
 
         void* buf;
         cudaMalloc(&buf, BATCH_SIZE * size * sizeof(float));
         buffers.push_back(buf);
     }
+
+    if(engine->getBindingIndex("policy_head") == -1)
+        has_policy = false;
+    else
+        has_policy = true;
 }
 void TrtModel::predict() {
+    int idx = 0;
+
     cudaSetDevice(Model::id);
 
-    cudaMemcpy(buffers[0], main_input, BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
-    cudaMemcpy(buffers[1], aux_input, BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
+    cudaMemcpy(buffers[idx++], main_input, BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
+    if(nn_type == 0)
+        cudaMemcpy(buffers[idx++], aux_input, BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
 
     context->execute(BATCH_SIZE, buffers.data());
 
-    cudaMemcpy(output, buffers[2], BATCH_SIZE * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+    if(has_policy)
+        cudaMemcpy(policy, buffers[idx++], BATCH_SIZE * NPOLICY * sizeof(float), cudaMemcpyDeviceToHost);
 
-    for(int i = 0;i < BATCH_SIZE;i++) {
-        float p = output[3*i+0] * 1.0 + output[3*i+1] * 0.5;
-        scores[i] = logit(p);
+    if(nn_type == 0)
+        cudaMemcpy(value, buffers[idx++], BATCH_SIZE * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+    else
+        cudaMemcpy(value, buffers[idx++], BATCH_SIZE * sizeof(float), cudaMemcpyDeviceToHost);
+
+    if(nn_type == 0) {
+        for(int i = 0;i < n_batch;i++) {
+            float p = value[3*i+0] * 1.0 + value[3*i+1] * 0.5;
+            scores[i] = logit(p);
+        }
+    } else {
+        for(int i = 0;i < n_batch;i++) {
+            float p = (value[i] + 1.0) * 0.5;
+            scores[i] = logit(p);
+
+            for(int j = 0;j < policy_size[i];j++) {
+                int idx = policy_index[i * MAX_MOVES + j];
+                float p = policy[i * NPOLICY + idx];
+                policy_scores[i * MAX_MOVES + j] = p;
+            }
+        }
     }
 }
 
@@ -290,7 +422,11 @@ static void CDECL nn_thread_proc(void* id) {
 /*
    Initialize tensorflow
 */
-DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_devices, int dev_type, int delay, int float_type) {
+static int add_to_batch(
+    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, int batch_id);
+
+DLLExport void CDECL load_neural_network(
+    char* path, int n_threads, int n_devices, int dev_type, int delay, int float_type, int lnn_type) {
 
     /*Message*/
     printf("Loading neural network : %s\n",path);
@@ -305,12 +441,24 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
     setenv("TF_CPP_MIN_LOG_LEVEL","3",1);
 #endif
 
+    init_index_table();
+
+    nn_type = lnn_type;
     delayms = delay;
     n_searchers = n_threads;
     N_DEVICES = n_devices;
     n_active_searchers = n_searchers;
     BATCH_SIZE = n_searchers / N_DEVICES;
     floatPrecision = float_type;
+
+    /*constants based on network type*/
+    if(nn_type == 0) {
+        CHANNELS = 24;
+        value_layer = "value/Softmax";
+    } else {
+        CHANNELS = 112;
+        value_layer = "value_head";
+    }
     
     /*Load tensorflow or tensorrt graphs on GPU*/
     netModel = new Model*[N_DEVICES];
@@ -350,7 +498,7 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
         int piece = _EMPTY, square = _EMPTY;
         Model* net = netModel[dev_id];
         for(int i = 0;i < BATCH_SIZE;i++)
-            add_to_batch(0, &piece, &square, dev_id);
+            add_to_batch(0, 0, 1, 1, 0, &piece, &square, dev_id);
         net->predict();
         net->n_batch = 0;
     }
@@ -363,9 +511,11 @@ DLLExport void CDECL load_neural_network(char* path, int n_threads, int n_device
 /*
    Add position to batch
 */
-static void fill_input_planes(int player, int* piece,int* square, float* data, float* adata);
+static void fill_input_planes(
+    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, float* data, float* adata);
 
-DLLExport int CDECL add_to_batch(int player, int* piece, int* square, int batch_id) {
+static int add_to_batch(
+    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, int batch_id) {
 
     //get identifier
     Model* net = netModel[batch_id];
@@ -380,21 +530,11 @@ DLLExport int CDECL add_to_batch(int player, int* piece, int* square, int batch_
     ainput += offset * (NPARAMS);
 
     //fill planes
-    fill_input_planes(player, piece, square, minput, ainput);
+    fill_input_planes(player, cast, fifty, hist, draw, piece, square, minput, ainput);
 
     return offset;
 }
 
-DLLExport void CDECL probe_neural_network_batch(int* scores, int batch_id) {
-    //get identifier
-    Model* net = netModel[batch_id];
-
-    //prediction
-    net->predict();
-
-    //copy result
-    memcpy(scores, net->scores, BATCH_SIZE * sizeof(int));
-}
 /*
    Evaluate position using NN
 */
@@ -404,7 +544,8 @@ DLLExport void CDECL probe_neural_network_batch(int* scores, int batch_id) {
     t_sleep(delayms); \
 }
 
-DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
+DLLExport int CDECL probe_neural_network(
+    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, int* moves, int* probs) {
 
     //choose batch id
     int batch_id;
@@ -429,7 +570,39 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     Model* net = netModel[batch_id];
 
     //add to batch
-    int offset = add_to_batch(player,piece,square,batch_id);
+    int offset = add_to_batch(player,cast,fifty,hist,draw,piece,square,batch_id);
+
+    //policy
+    if(moves) {
+        int* s = moves, cnt = 0;
+        while(*s >= 0) {
+            int index;
+            {
+                int from, to, prom, compi;
+                from = *s++;
+                to = *s++;
+                prom = *s++;
+                if(player == _BLACK) {
+                    from = MIRRORR64(from);
+                    to = MIRRORR64(to);
+                }
+                compi = from * 64 + to;
+                if(prom) {
+                    prom = PIECE(prom);
+                    if(prom != knight) {
+                        compi = 4096 +  file64(from) * 9 + 
+                                (to - from - 7) * 3 + (prom - queen);
+                    }
+                }
+
+                index = move_index_table[compi];
+            }
+
+            net->policy_index[offset * MAX_MOVES + cnt] = index;
+            cnt++;
+        }
+        net->policy_size[offset] = cnt;
+    }
 
     //pause threads till eval completes
     if(offset + 1 < BATCH_SIZE) {
@@ -456,6 +629,14 @@ DLLExport int CDECL probe_neural_network(int player, int* piece, int* square) {
     } else {
         net->predict();
         net->wait = 0;
+    }
+
+    //policy
+    if(moves) {
+        for(int j = 0;j < net->policy_size[offset];j++) {
+            float p = net->policy_scores[offset * MAX_MOVES + j];
+            probs[j] = p * 10000;
+        }
     }
 
     //Wait until all eval calls are finished
@@ -490,37 +671,17 @@ DLLExport void CDECL set_num_active_searchers(int n_searchers) {
 /*
    Fill input planes
 */
-static void fill_input_planes(int player, int* piece,int* square, float* data, float* adata) {
+static void fill_input_planes(
+    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, float* data, float* adata) {
+    
     int pc, col, sq, to;
-    int board[128];
-
-    /*zero board*/
-    memset(board, 0, sizeof(int) * 128);
-    memset(data,  0, sizeof(float) * 8 * 8 * CHANNELS);
-    memset(adata, 0, sizeof(float) * NPARAMS);
-
-    /*fill board*/
-    int ksq = SQ6488(square[player]);
-    bool fliph = (file(ksq) <= FILED);
-
-    for(int i = 0; (pc = piece[i]) != _EMPTY; i++) {
-        sq = SQ6488(square[i]);
-        if(player == _BLACK) {
-            sq = MIRRORR(sq);
-            pc = invert_color(pc);
-        }
-        if(fliph) 
-            sq = MIRRORF(sq);
-
-        board[sq] = pc;
-    }
 
     /* 
        Add the attack map planes 
     */
 #define DHWC(sq,C)     data[rank(sq) * 8 * CHANNELS + file(sq) * CHANNELS + C]
 #define DCHW(sq,C)     data[C * 8 * 8 + rank(sq) * 8 + file(sq)]
-#define D(sq,C)        ( is_trt ? DCHW(sq,C) : DHWC(sq,C) )
+#define D(sq,C)        ( (is_trt || (nn_type > 0) ) ? DCHW(sq,C) : DHWC(sq,C) )
 
 #define NK_MOVES(dir, off) {                    \
         to = sq + dir;                          \
@@ -536,120 +697,193 @@ static void fill_input_planes(int player, int* piece,int* square, float* data, f
         }                                       \
 }
 
-    for(int i = 0; (pc = piece[i]) != _EMPTY; i++) {
+    memset(data,  0, sizeof(float) * 8 * 8 * CHANNELS);
 
-        sq = SQ6488(square[i]);
-        if(player == _BLACK) {
-            sq = MIRRORR(sq);
-            pc = invert_color(pc);
-        }
-        if(fliph) 
-            sq = MIRRORF(sq);
-        D(sq,(pc+11)) = 1.0f;
+    if(nn_type == 0) {
 
-        switch(pc) {
-            case wking:
-                NK_MOVES(RU,0);
-                NK_MOVES(LD,0);
-                NK_MOVES(LU,0);
-                NK_MOVES(RD,0);
-                NK_MOVES(UU,0);
-                NK_MOVES(DD,0);
-                NK_MOVES(RR,0);
-                NK_MOVES(LL,0);
-                break;
-            case wqueen:
-                BRQ_MOVES(RU,1);
-                BRQ_MOVES(LD,1);
-                BRQ_MOVES(LU,1);
-                BRQ_MOVES(RD,1);
-                BRQ_MOVES(UU,1);
-                BRQ_MOVES(DD,1);
-                BRQ_MOVES(RR,1);
-                BRQ_MOVES(LL,1);
-                break;
-            case wrook:
-                BRQ_MOVES(UU,2);
-                BRQ_MOVES(DD,2);
-                BRQ_MOVES(RR,2);
-                BRQ_MOVES(LL,2);
-                break;
-            case wbishop:
-                BRQ_MOVES(RU,3);
-                BRQ_MOVES(LD,3);
-                BRQ_MOVES(LU,3);
-                BRQ_MOVES(RD,3);
-                break;
-            case wknight:
-                NK_MOVES(RRU,4);
-                NK_MOVES(LLD,4);
-                NK_MOVES(RUU,4);
-                NK_MOVES(LDD,4);
-                NK_MOVES(LLU,4);
-                NK_MOVES(RRD,4);
-                NK_MOVES(RDD,4);
-                NK_MOVES(LUU,4);
-                break;
-            case wpawn:
-                NK_MOVES(RU,5);
-                NK_MOVES(LU,5);
-                break;
-            case bking:
-                NK_MOVES(RU,6);
-                NK_MOVES(LD,6);
-                NK_MOVES(LU,6);
-                NK_MOVES(RD,6);
-                NK_MOVES(UU,6);
-                NK_MOVES(DD,6);
-                NK_MOVES(RR,6);
-                NK_MOVES(LL,6);
-                break;
-            case bqueen:
-                BRQ_MOVES(RU,7);
-                BRQ_MOVES(LD,7);
-                BRQ_MOVES(LU,7);
-                BRQ_MOVES(RD,7);
-                BRQ_MOVES(UU,7);
-                BRQ_MOVES(DD,7);
-                BRQ_MOVES(RR,7);
-                BRQ_MOVES(LL,7);
-                break;
-            case brook:
-                BRQ_MOVES(UU,8);
-                BRQ_MOVES(DD,8);
-                BRQ_MOVES(RR,8);
-                BRQ_MOVES(LL,8);
-                break;
-            case bbishop:
-                BRQ_MOVES(RU,9);
-                BRQ_MOVES(LD,9);
-                BRQ_MOVES(LU,9);
-                BRQ_MOVES(RD,9);
-                break;
-            case bknight:
-                NK_MOVES(RRU,10);
-                NK_MOVES(LLD,10);
-                NK_MOVES(RUU,10);
-                NK_MOVES(LDD,10);
-                NK_MOVES(LLU,10);
-                NK_MOVES(RRD,10);
-                NK_MOVES(RDD,10);
-                NK_MOVES(LUU,10);
-                break;
-            case bpawn:
-                NK_MOVES(RD,11);
-                NK_MOVES(LD,11);
-                break;
+        int board[128];
+        int ksq = SQ6488(square[player]);
+        bool fliph = (file(ksq) <= FILED);
+
+        memset(board, 0, sizeof(int) * 128);
+        memset(adata, 0, sizeof(float) * NPARAMS);
+
+        for(int i = 0; (pc = piece[i]) != _EMPTY; i++) {
+            sq = SQ6488(square[i]);
+            if(player == _BLACK) {
+                sq = MIRRORR(sq);
+                pc = invert_color(pc);
+            }
+            if(fliph) 
+                sq = MIRRORF(sq);
+
+            board[sq] = pc;
         }
 
-        col = COLOR(pc);
-        pc = PIECE(pc);
+        for(int i = 0; (pc = piece[i]) != _EMPTY; i++) {
+            sq = SQ6488(square[i]);
+            if(player == _BLACK) {
+                sq = MIRRORR(sq);
+                pc = invert_color(pc);
+            }
+            if(fliph) 
+                sq = MIRRORF(sq);
+            D(sq,(pc+11)) = 1.0f;
+            switch(pc) {
+                case wking:
+                    NK_MOVES(RU,0);
+                    NK_MOVES(LD,0);
+                    NK_MOVES(LU,0);
+                    NK_MOVES(RD,0);
+                    NK_MOVES(UU,0);
+                    NK_MOVES(DD,0);
+                    NK_MOVES(RR,0);
+                    NK_MOVES(LL,0);
+                    break;
+                case wqueen:
+                    BRQ_MOVES(RU,1);
+                    BRQ_MOVES(LD,1);
+                    BRQ_MOVES(LU,1);
+                    BRQ_MOVES(RD,1);
+                    BRQ_MOVES(UU,1);
+                    BRQ_MOVES(DD,1);
+                    BRQ_MOVES(RR,1);
+                    BRQ_MOVES(LL,1);
+                    break;
+                case wrook:
+                    BRQ_MOVES(UU,2);
+                    BRQ_MOVES(DD,2);
+                    BRQ_MOVES(RR,2);
+                    BRQ_MOVES(LL,2);
+                    break;
+                case wbishop:
+                    BRQ_MOVES(RU,3);
+                    BRQ_MOVES(LD,3);
+                    BRQ_MOVES(LU,3);
+                    BRQ_MOVES(RD,3);
+                    break;
+                case wknight:
+                    NK_MOVES(RRU,4);
+                    NK_MOVES(LLD,4);
+                    NK_MOVES(RUU,4);
+                    NK_MOVES(LDD,4);
+                    NK_MOVES(LLU,4);
+                    NK_MOVES(RRD,4);
+                    NK_MOVES(RDD,4);
+                    NK_MOVES(LUU,4);
+                    break;
+                case wpawn:
+                    NK_MOVES(RU,5);
+                    NK_MOVES(LU,5);
+                    break;
+                case bking:
+                    NK_MOVES(RU,6);
+                    NK_MOVES(LD,6);
+                    NK_MOVES(LU,6);
+                    NK_MOVES(RD,6);
+                    NK_MOVES(UU,6);
+                    NK_MOVES(DD,6);
+                    NK_MOVES(RR,6);
+                    NK_MOVES(LL,6);
+                    break;
+                case bqueen:
+                    BRQ_MOVES(RU,7);
+                    BRQ_MOVES(LD,7);
+                    BRQ_MOVES(LU,7);
+                    BRQ_MOVES(RD,7);
+                    BRQ_MOVES(UU,7);
+                    BRQ_MOVES(DD,7);
+                    BRQ_MOVES(RR,7);
+                    BRQ_MOVES(LL,7);
+                    break;
+                case brook:
+                    BRQ_MOVES(UU,8);
+                    BRQ_MOVES(DD,8);
+                    BRQ_MOVES(RR,8);
+                    BRQ_MOVES(LL,8);
+                    break;
+                case bbishop:
+                    BRQ_MOVES(RU,9);
+                    BRQ_MOVES(LD,9);
+                    BRQ_MOVES(LU,9);
+                    BRQ_MOVES(RD,9);
+                    break;
+                case bknight:
+                    NK_MOVES(RRU,10);
+                    NK_MOVES(LLD,10);
+                    NK_MOVES(RUU,10);
+                    NK_MOVES(LDD,10);
+                    NK_MOVES(LLU,10);
+                    NK_MOVES(RRD,10);
+                    NK_MOVES(RDD,10);
+                    NK_MOVES(LUU,10);
+                    break;
+                case bpawn:
+                    NK_MOVES(RD,11);
+                    NK_MOVES(LD,11);
+                    break;
+            }
 
-        if(pc != king) {
-            if(col == white)
-                adata[pc - queen]++;
-            else
-                adata[pc - queen]--;
+            col = COLOR(pc);
+            pc = PIECE(pc);
+
+            if(pc != king) {
+                if(col == white)
+                    adata[pc - queen]++;
+                else
+                    adata[pc - queen]--;
+            }
+        }
+
+    } else {
+
+        static const int piece_map[2][12] = {
+            {
+                wpawn,wknight,wbishop,wrook,wqueen,wking,
+                bpawn,bknight,bbishop,brook,bqueen,bking
+            },
+            {
+                bpawn,bknight,bbishop,brook,bqueen,bking,
+                wpawn,wknight,wbishop,wrook,wqueen,wking
+            }
+        };
+
+        for(int h = 0, i = 0; h < hist; h++) {
+            for(; (pc = piece[i]) != _EMPTY; i++) {
+                sq = SQ6488(square[i]);
+                if(player == _BLACK) 
+                    sq = MIRRORR(sq);
+                int off = piece_map[player][pc - wking]
+                         - wking + 13 * h;
+                D(sq,off) = 1.0f;
+            }
+            if(draw && draw[h]) {
+                int off = 13 * h + 12;
+                for(int sq = 0; sq < 64; sq++) {
+                    sq = SQ6488(sq);
+                    D(sq,off) = 1.0;
+                }
+            }
+            i++;
+        }
+
+        for(int i = 0; i < 64; i++) {
+            sq = SQ6488(i);
+            if(player == _BLACK) {
+                if(cast & 8) D(sq,(CHANNELS - 8)) = 1.0;
+                if(cast & 4) D(sq,(CHANNELS - 7)) = 1.0;
+                if(cast & 2) D(sq,(CHANNELS - 6)) = 1.0;
+                if(cast & 1) D(sq,(CHANNELS - 5)) = 1.0;
+                D(sq,(CHANNELS - 4)) = 1.0;
+            } else {
+                if(cast & 2) D(sq,(CHANNELS - 8)) = 1.0;
+                if(cast & 1) D(sq,(CHANNELS - 7)) = 1.0;
+                if(cast & 8) D(sq,(CHANNELS - 6)) = 1.0;
+                if(cast & 4) D(sq,(CHANNELS - 5)) = 1.0;
+                D(sq,(CHANNELS - 4)) = 0.0;
+            }
+            D(sq,(CHANNELS - 3)) = fifty;
+            D(sq,(CHANNELS - 1)) = 1.0;
         }
     }
 
