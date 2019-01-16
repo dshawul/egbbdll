@@ -24,7 +24,7 @@ static const int NPARAMS = 5;
 static const int NPOLICY = 1858;
 static const string main_input_layer = "main_input";
 static const string aux_input_layer = "aux_input";
-static const string policy_layer = "policy_head";
+static string policy_layer;
 static string value_layer;
 
 static int N_DEVICES;
@@ -212,12 +212,19 @@ void TfModel::predict() {
             {aux_input_layer, *aux_input}
         };
 
-        TF_CHECK_OK( session->Run(inputs, {value_layer}, {}, &outputs) );
+        TF_CHECK_OK( session->Run(inputs, {value_layer,policy_layer}, {}, &outputs) );
 
-        auto pp = outputs[0].matrix<float>();
+        auto pp0 = outputs[0].matrix<float>();
+        auto pp1 = outputs[1].matrix<float>();
         for(int i = 0;i < n_batch; i++) {
-            float p = pp(i,0) * 1.0 + pp(i,1) * 0.5;
+            float p = pp0(i,0) * 1.0 + pp0(i,1) * 0.5;
             scores[i] = logit(p);
+
+            for(int j = 0;j < policy_size[i];j++) {
+                int idx = policy_index[i * MAX_MOVES + j];
+                float p = pp1(i,idx);
+                policy_scores[i * MAX_MOVES + j] = p;
+            }
         }
     } else {
         std::vector<std::pair<string, Tensor> > inputs = {
@@ -226,10 +233,10 @@ void TfModel::predict() {
 
         TF_CHECK_OK( session->Run(inputs, {value_layer,policy_layer}, {}, &outputs) );
 
-        auto pp0 = outputs[0].flat<float>();
+        auto pp0 = outputs[0].matrix<float>();
         auto pp1 = outputs[1].matrix<float>();
         for(int i = 0;i < n_batch; i++) {
-            float p = (pp0(i) + 1.0) * 0.5;
+            float p = (pp0(i,0) + 1.0) * 0.5;
             scores[i] = logit(p);
 
             for(int j = 0;j < policy_size[i];j++) {
@@ -266,11 +273,11 @@ class TrtModel : public Model {
     int numBindings;
     nvinfer1::DataType floatMode;
     std::vector<void*> buffers;
-    bool has_policy;
     float* main_input;
     float* aux_input;
     float* value;
     float* policy;
+    int maini, auxi, policyi, valuei;
 public:
     TrtModel();
     ~TrtModel();
@@ -291,6 +298,8 @@ TrtModel::TrtModel() : Model() {
     if(nn_type == 0)
         parser->registerInput(aux_input_layer.c_str(), 
             nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNC);
+    parser->registerOutput(value_layer.c_str());
+    parser->registerOutput(policy_layer.c_str());
     context = 0;
     engine = 0;
     numBindings = 0;
@@ -359,39 +368,51 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
         for(size_t j = 0; j < d.nbDims; j++) 
             size*= d.d[j];
 
+#if 0
+        printf("%d. %s %d =",i,engine->getBindingName(i),size);
+        for(size_t j = 0; j < d.nbDims; j++) 
+            printf(" %d",d.d[j]);
+        printf("\n");
+        fflush(stdout);
+#endif
+
         void* buf;
         cudaMalloc(&buf, BATCH_SIZE * size * sizeof(float));
         buffers.push_back(buf);
     }
 
-    if(engine->getBindingIndex("policy_head") == -1)
-        has_policy = false;
-    else
-        has_policy = true;
+    maini = engine->getBindingIndex(main_input_layer.c_str());
+    auxi = engine->getBindingIndex(aux_input_layer.c_str());
+    policyi = engine->getBindingIndex(policy_layer.c_str());
+    valuei = engine->getBindingIndex(value_layer.c_str());
 }
 void TrtModel::predict() {
-    int idx = 0;
 
     cudaSetDevice(Model::id);
 
-    cudaMemcpy(buffers[idx++], main_input, BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
+    cudaMemcpy(buffers[maini], main_input, BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
     if(nn_type == 0)
-        cudaMemcpy(buffers[idx++], aux_input, BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
+        cudaMemcpy(buffers[auxi], aux_input, BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
 
     context->execute(BATCH_SIZE, buffers.data());
 
-    if(has_policy)
-        cudaMemcpy(policy, buffers[idx++], BATCH_SIZE * NPOLICY * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(policy, buffers[policyi], BATCH_SIZE * NPOLICY * sizeof(float), cudaMemcpyDeviceToHost);
 
     if(nn_type == 0)
-        cudaMemcpy(value, buffers[idx++], BATCH_SIZE * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(value, buffers[valuei], BATCH_SIZE * 3 * sizeof(float), cudaMemcpyDeviceToHost);
     else
-        cudaMemcpy(value, buffers[idx++], BATCH_SIZE * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(value, buffers[valuei], BATCH_SIZE * sizeof(float), cudaMemcpyDeviceToHost);
 
     if(nn_type == 0) {
         for(int i = 0;i < n_batch;i++) {
             float p = value[3*i+0] * 1.0 + value[3*i+1] * 0.5;
             scores[i] = logit(p);
+
+            for(int j = 0;j < policy_size[i];j++) {
+                int idx = policy_index[i * MAX_MOVES + j];
+                float p = policy[i * NPOLICY + idx];
+                policy_scores[i * MAX_MOVES + j] = p;
+            }
         }
     } else {
         for(int i = 0;i < n_batch;i++) {
@@ -455,9 +476,11 @@ DLLExport void CDECL load_neural_network(
     if(nn_type == 0) {
         CHANNELS = 24;
         value_layer = "value/Softmax";
+        policy_layer = "policy/BiasAdd";
     } else {
         CHANNELS = 112;
         value_layer = "value_head";
+        policy_layer = "policy_head";
     }
     
     /*Load tensorflow or tensorrt graphs on GPU*/
@@ -703,7 +726,6 @@ static void fill_input_planes(
 
         int board[128];
         int ksq = SQ6488(square[player]);
-        bool fliph = (file(ksq) <= FILED);
 
         memset(board, 0, sizeof(int) * 128);
         memset(adata, 0, sizeof(float) * NPARAMS);
@@ -714,8 +736,6 @@ static void fill_input_planes(
                 sq = MIRRORR(sq);
                 pc = invert_color(pc);
             }
-            if(fliph) 
-                sq = MIRRORF(sq);
 
             board[sq] = pc;
         }
@@ -726,8 +746,6 @@ static void fill_input_planes(
                 sq = MIRRORR(sq);
                 pc = invert_color(pc);
             }
-            if(fliph) 
-                sq = MIRRORF(sq);
             D(sq,(pc+11)) = 1.0f;
             switch(pc) {
                 case wking:
