@@ -21,7 +21,11 @@
 
 static int CHANNELS;
 static const int NPARAMS = 5;
+#if 0
+static const int NPOLICY = 4672;
+#else
 static const int NPOLICY = 1858;
+#endif
 static const string main_input_layer = "main_input";
 static const string aux_input_layer = "aux_input";
 static string policy_layer;
@@ -53,8 +57,31 @@ static inline int logit(double p) {
 }
 
 /*
-Move policy formact according to lczero
+Move policy format
 */
+
+/* 1. AlphaZero format: 56=queen moves, 8=knight moves, 9 pawn promotions */
+static const UBMP8 t_move_map[] = {
+  0,  0,  0,  0,  0,  0,  0,  0,  0, 35,  0,  0,  0,  0,  0,  0,
+ 27,  0,  0,  0,  0,  0,  0, 55,  0,  0, 36,  0,  0,  0,  0,  0,
+ 26,  0,  0,  0,  0,  0, 54,  0,  0,  0,  0, 37,  0,  0,  0,  0,
+ 25,  0,  0,  0,  0, 53,  0,  0,  0,  0,  0,  0, 38,  0,  0,  0,
+ 24,  0,  0,  0, 52,  0,  0,  0,  0,  0,  0,  0,  0, 39,  0,  0,
+ 23,  0,  0, 51,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 40, 60,
+ 22, 56, 50,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 61, 41,
+ 21, 49, 57,  0,  0,  0,  0,  0,  0,  7,  8,  9, 10, 11, 12, 13,
+  0,  0,  1,  2,  3,  4,  5,  6,  0,  0,  0,  0,  0,  0, 63, 48,
+ 14, 28, 59,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 47, 62,
+ 15, 58, 29,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 46,  0,  0,
+ 16,  0,  0, 30,  0,  0,  0,  0,  0,  0,  0,  0, 45,  0,  0,  0,
+ 17,  0,  0,  0, 31,  0,  0,  0,  0,  0,  0, 44,  0,  0,  0,  0,
+ 18,  0,  0,  0,  0, 32,  0,  0,  0,  0, 43,  0,  0,  0,  0,  0,
+ 19,  0,  0,  0,  0,  0, 33,  0,  0, 42,  0,  0,  0,  0,  0,  0,
+ 20,  0,  0,  0,  0,  0,  0, 34,  0,  0,  0,  0,  0,  0,  0,  0
+};
+static const UBMP8* const move_map = t_move_map + 0x80;
+
+/* 2. LcZero format: flat move representation */
 static const int MOVE_TAB_SIZE = 64*64+8*3*3;
 
 static unsigned short move_index_table[MOVE_TAB_SIZE];
@@ -97,7 +124,6 @@ static void init_index_table() {
             move_index_table[idx+8] = cnt++;
         }
     }
-
 }
 
 /*
@@ -462,8 +488,6 @@ DLLExport void CDECL load_neural_network(
     setenv("TF_CPP_MIN_LOG_LEVEL","3",1);
 #endif
 
-    init_index_table();
-
     nn_type = lnn_type;
     delayms = delay;
     n_searchers = n_threads;
@@ -472,11 +496,17 @@ DLLExport void CDECL load_neural_network(
     BATCH_SIZE = n_searchers / N_DEVICES;
     floatPrecision = float_type;
 
+    init_index_table();
+
     /*constants based on network type*/
     if(nn_type == 0) {
         CHANNELS = 24;
         value_layer = "value/Softmax";
+#if 0
+        policy_layer = "policy/Reshape";
+#else
         policy_layer = "policy/BiasAdd";
+#endif
     } else {
         CHANNELS = 112;
         value_layer = "value_head";
@@ -515,7 +545,7 @@ DLLExport void CDECL load_neural_network(
     while(nn_loaded < N_DEVICES)
         t_sleep(1);
 	delete[] tid;
-
+#if 1
     /*warm up nn*/
     for(int dev_id = 0; dev_id < N_DEVICES; dev_id++) {
         int piece = _EMPTY, square = _EMPTY;
@@ -525,7 +555,7 @@ DLLExport void CDECL load_neural_network(
         net->predict();
         net->n_batch = 0;
     }
-
+#endif
     /*Message*/
     printf("Neural network loaded !\t\n");
     fflush(stdout);
@@ -599,17 +629,31 @@ DLLExport int CDECL probe_neural_network(
     if(moves) {
         int* s = moves, cnt = 0;
         while(*s >= 0) {
-            int index;
-            {
-                int from, to, prom, compi;
-                from = *s++;
-                to = *s++;
-                prom = *s++;
-                if(player == _BLACK) {
-                    from = MIRRORR64(from);
-                    to = MIRRORR64(to);
+            int index, from, to, prom;
+            from = *s++;
+            to = *s++;
+            prom = *s++;
+            if(player == _BLACK) {
+                from = MIRRORR64(from);
+                to = MIRRORR64(to);
+            }
+
+#if 0
+            if(nn_type == 0) {
+                index = from * 73;
+                if(prom) {
+                    prom = PIECE(prom);
+                    if(prom != queen)
+                        index += 64 + (to - from - 7) * 3  + (prom - queen);
+                    else
+                        index += move_map[SQ6488(to) - SQ6488(from)];
+                } else {
+                    index += move_map[SQ6488(to) - SQ6488(from)];
                 }
-                compi = from * 64 + to;
+            } else 
+#endif
+            {
+                int compi = from * 64 + to;
                 if(prom) {
                     prom = PIECE(prom);
                     if(prom != knight) {
@@ -903,6 +947,22 @@ static void fill_input_planes(
             D(sq,(CHANNELS - 3)) = fifty;
             D(sq,(CHANNELS - 1)) = 1.0;
         }
+
+#if 0
+        for(int c = 0; c < CHANNELS;c++) {
+            printf("Channel %d\n",c);
+            for(int i = 0; i < 8; i++) {
+                for(int j = 0; j < 8; j++) {
+                    int sq = SQ(i,j);
+                    printf("%d ",int(D(sq,c)));
+                }
+                printf("\n");
+            }
+            printf("\n");
+        }
+        fflush(stdout);
+#endif
+
     }
 
 #undef NK_MOVES
