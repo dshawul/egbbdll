@@ -19,13 +19,11 @@
 #include "common.h"
 #include "egbbdll.h"
 
+#define AZPOLICY 1
+
 static int CHANNELS;
+static int NPOLICY;
 static const int NPARAMS = 5;
-#if 0
-static const int NPOLICY = 4672;
-#else
-static const int NPOLICY = 1858;
-#endif
 static const string main_input_layer = "main_input";
 static const string aux_input_layer = "aux_input";
 static string policy_layer;
@@ -502,13 +500,16 @@ DLLExport void CDECL load_neural_network(
     if(nn_type == 0) {
         CHANNELS = 24;
         value_layer = "value/Softmax";
-#if 0
+#if AZPOLICY
         policy_layer = "policy/Reshape";
+        NPOLICY = 4672;
 #else
         policy_layer = "policy/BiasAdd";
+        NPOLICY = 1858;
 #endif
     } else {
         CHANNELS = 112;
+        NPOLICY = 1858;
         value_layer = "value_head";
         policy_layer = "policy_head";
     }
@@ -638,7 +639,7 @@ DLLExport int CDECL probe_neural_network(
                 to = MIRRORR64(to);
             }
 
-#if 0
+#if AZPOLICY
             if(nn_type == 0) {
                 index = from * 73;
                 if(prom) {
@@ -944,7 +945,7 @@ static void fill_input_planes(
                 if(cast & 4) D(sq,(CHANNELS - 5)) = 1.0;
                 D(sq,(CHANNELS - 4)) = 0.0;
             }
-            D(sq,(CHANNELS - 3)) = fifty;
+            D(sq,(CHANNELS - 3)) = fifty / 100.0;
             D(sq,(CHANNELS - 1)) = 1.0;
         }
 
