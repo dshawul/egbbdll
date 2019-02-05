@@ -11,6 +11,7 @@
 #ifdef TRT
 #include <fstream>
 #include <string>
+#include <iterator>
 #include "include/cuda_runtime_api.h"
 #include "include/NvInfer.h"
 #include "include/NvUffParser.h"
@@ -123,6 +124,12 @@ static void init_index_table() {
         }
     }
 }
+
+/*
+Fill input planes
+*/
+static void fill_input_planes(
+    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, float* data, float* adata);
 
 /*
   Network model
@@ -282,6 +289,108 @@ void TfModel::predict() {
 using namespace nvuffparser;
 using namespace nvinfer1;
 
+class Int8CacheCalibrator : public IInt8EntropyCalibrator {
+public:
+
+  Int8CacheCalibrator(std::string cacheFile)
+    : mCacheFile(cacheFile) {
+
+    void* buf;
+    cudaMalloc(&buf, CAL_BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS);
+    buffers.push_back(buf);
+    if(nn_type == 0) {
+        cudaMalloc(&buf, CAL_BATCH_SIZE * sizeof(float) * NPARAMS);
+        buffers.push_back(buf);
+    }
+    counter = 0;
+    main_input = new float[CAL_BATCH_SIZE * 8 * 8 * CHANNELS];
+    aux_input = new float[CAL_BATCH_SIZE * NPARAMS];
+
+    epd_file = fopen(calib_file_name.c_str(),"r");
+    if(!epd_file) {
+        printf("Calibration epd file not found!\n");
+        fflush(stdout);
+        exit(0);
+    }
+  }
+
+  ~Int8CacheCalibrator() override {
+    cudaFree(buffers[0]);
+    if(nn_type == 0)
+        cudaFree(buffers[1]);
+    delete[] main_input;
+    delete[] aux_input;
+    fclose(epd_file);
+  }
+  
+  int getBatchSize() const override {
+    return CAL_BATCH_SIZE;
+  }
+  
+  bool getBatch(void* bindings[], const char* names[], int nbBindings) override {
+    if (counter >= NUM_CAL_BATCH)
+        return false;
+
+    std::cout << "Calibrating on Batch " << counter << "\r";
+
+    int piece[33],square[33],isdraw[1],hist=1,player,castle,fifty;
+    char fen[MAX_STR];
+    for(int i = 0; i < CAL_BATCH_SIZE; i++) {
+        if(!fgets(fen,MAX_STR,epd_file))
+            return false;
+        decode_fen(fen,player,castle,fifty,piece,square);
+
+        float* minput = main_input + i * (8 * 8 * CHANNELS);
+        float* ainput = aux_input + i * (NPARAMS);
+        fill_input_planes(player,castle,fifty,hist,isdraw,piece,square,minput,ainput);
+    }
+
+    cudaMemcpy(buffers[0], main_input, 
+        CAL_BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
+    bindings[0] = buffers[0];
+    if(nn_type == 0) {
+        cudaMemcpy(buffers[1], aux_input, 
+            CAL_BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
+        bindings[1] = buffers[1];
+    }
+
+    counter++;
+    return true;
+  }
+  
+  const void* readCalibrationCache(size_t& length) override {
+    mCalibrationCache.clear();
+    std::ifstream input(mCacheFile, std::ios::binary);
+    input >> std::noskipws;
+    if (input.good())
+        std::copy(std::istream_iterator<char>(input), 
+            std::istream_iterator<char>(), 
+            std::back_inserter(mCalibrationCache));
+
+    length = mCalibrationCache.size();
+    return length ? &mCalibrationCache[0] : nullptr;
+  }
+
+  void writeCalibrationCache(const void* cache, size_t length) override {
+    std::ofstream output(mCacheFile, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(cache), length);
+  }
+
+private:
+  std::string mCacheFile;
+  std::vector<char> mCalibrationCache;
+  std::vector<void*> buffers;
+  float* main_input;
+  float* aux_input;
+  int counter;
+  FILE* epd_file;
+  static const int CAL_BATCH_SIZE = 1024;
+  static const int NUM_CAL_BATCH = 10;
+  static const std::string calib_file_name;
+};
+
+const std::string Int8CacheCalibrator::calib_file_name = "calibrate.epd";
+
 class Logger : public ILogger {
     void log(Severity severity, const char* msg) override {
         if (severity != Severity::kINFO)
@@ -360,18 +469,32 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
     cudaSetDevice(Model::id);
 
     IBuilder* builder = createInferBuilder(logger);
-    INetworkDefinition* network = builder->createNetwork();
-    if(!parser->parse(uff_file_name.c_str(), *network, floatMode)) {
-        std::cout << "Fail to parse network " << uff_file_name << std::endl;;
+    if ((floatMode == nvinfer1::DataType::kINT8 && !builder->platformHasFastInt8()) 
+     || (floatMode == nvinfer1::DataType::kHALF && !builder->platformHasFastFp16())) {
+        std::cout << "Device does not support this low precision mode." << std::endl;
         return;
-    }     
+    }
+
+    INetworkDefinition* network = builder->createNetwork();
+    nvinfer1::DataType loadMode = (floatMode == nvinfer1::DataType::kINT8) ?
+                        nvinfer1::DataType::kFLOAT : floatMode;
+    if(!parser->parse(uff_file_name.c_str(), *network, loadMode)) {
+        std::cout << "Fail to parse network " << uff_file_name << std::endl;
+        return;
+    }
+
+    std::string cacheName = uff_file_name + ".cache";
+    Int8CacheCalibrator calibrator(cacheName);
+
     if (floatMode == nvinfer1::DataType::kHALF) {
-        builder->setHalf2Mode(true);
+        builder->setFp16Mode(true);
     } else if (floatMode == nvinfer1::DataType::kINT8) {
         builder->setInt8Mode(true);
+        builder->setInt8Calibrator(&calibrator);
     }
     builder->setMaxBatchSize(BATCH_SIZE);
     builder->setMaxWorkspaceSize((1 << 30));
+
     engine = builder->buildCudaEngine(*network);
     if (!engine) {
         std::cout << "Unable to create engine" << std::endl;
@@ -414,18 +537,23 @@ void TrtModel::predict() {
 
     cudaSetDevice(Model::id);
 
-    cudaMemcpy(buffers[maini], main_input, BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
+    cudaMemcpy(buffers[maini], main_input, 
+        BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
     if(nn_type == 0)
-        cudaMemcpy(buffers[auxi], aux_input, BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
+        cudaMemcpy(buffers[auxi], aux_input, 
+            BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
 
     context->execute(BATCH_SIZE, buffers.data());
 
-    cudaMemcpy(policy, buffers[policyi], BATCH_SIZE * NPOLICY * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(policy, buffers[policyi], 
+        BATCH_SIZE * NPOLICY * sizeof(float), cudaMemcpyDeviceToHost);
 
     if(nn_type == 0)
-        cudaMemcpy(value, buffers[valuei], BATCH_SIZE * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(value, buffers[valuei], 
+            BATCH_SIZE * 3 * sizeof(float), cudaMemcpyDeviceToHost);
     else
-        cudaMemcpy(value, buffers[valuei], BATCH_SIZE * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(value, buffers[valuei], 
+            BATCH_SIZE * sizeof(float), cudaMemcpyDeviceToHost);
 
     if(nn_type == 0) {
         for(int i = 0;i < n_batch;i++) {
@@ -565,8 +693,6 @@ DLLExport void CDECL load_neural_network(
 /*
    Add position to batch
 */
-static void fill_input_planes(
-    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, float* data, float* adata);
 
 static int add_to_batch(
     int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, int batch_id) {

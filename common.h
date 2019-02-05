@@ -368,6 +368,8 @@ public:
 /*Searchers*/
 extern SEARCHER searchers[MAX_CPUS];
 extern LOCK searcher_lock;
+
+void decode_fen(const char* fen_str, int& player, int& castle, int& fifty, int* pieces, int* square);
 /*
 End
 */

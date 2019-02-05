@@ -739,8 +739,7 @@ DLLExport int  CDECL probe_egbb_xmen(int player, int* piece,int* square) {
 /*
 fen
 */
-DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
-    int piece[MAX_PIECES],square[MAX_PIECES],player;
+void decode_fen(const char* fen_str, int& player, int& castle, int& fifty, int* piece, int* square) {
 
     /*decode fen*/
     int sq,index = 0;
@@ -771,7 +770,7 @@ DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
     p++;
 
     /*castling rights*/
-    int castle = 0;
+    castle = 0;
     if(*p == '-') {
         p++;
     } else {
@@ -795,13 +794,16 @@ DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
     square[index] = epsquare;
 
     /*fifty & hply*/
-    int fifty,move_number;
+    int move_number;
     p++;
     if(*p) sscanf(p,"%d %d",&fifty,&move_number);
     else {
         fifty = 0;
     }
-    
-    /*get egbb score*/
+}
+
+DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
+    int piece[33],square[33],player,castle,fifty;
+    decode_fen((char*)fen_str,player,castle,fifty,piece,square);
     return probe_egbb_xxx(player,piece,square);
 }
