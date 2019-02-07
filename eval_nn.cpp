@@ -292,8 +292,7 @@ using namespace nvinfer1;
 class Int8CacheCalibrator : public IInt8EntropyCalibrator {
 public:
 
-  Int8CacheCalibrator(std::string cacheFile)
-    : mCacheFile(cacheFile) {
+  Int8CacheCalibrator() {
 
     void* buf;
     cudaMalloc(&buf, CAL_BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS);
@@ -308,7 +307,7 @@ public:
 
     epd_file = fopen(calib_file_name.c_str(),"r");
     if(!epd_file) {
-        printf("Calibration epd file not found!\n");
+        printf("Epd file needed for calibration not found!\n");
         fflush(stdout);
         exit(0);
     }
@@ -331,7 +330,7 @@ public:
     if (counter >= NUM_CAL_BATCH)
         return false;
 
-    std::cout << "Calibrating on Batch " << counter << "\r";
+    std::cout << "Calibrating on Batch " << counter + 1 << " of " << NUM_CAL_BATCH << "\r";
 
     int piece[33],square[33],isdraw[1],hist=1,player,castle,fifty;
     char fen[MAX_STR];
@@ -359,32 +358,19 @@ public:
   }
   
   const void* readCalibrationCache(size_t& length) override {
-    mCalibrationCache.clear();
-    std::ifstream input(mCacheFile, std::ios::binary);
-    input >> std::noskipws;
-    if (input.good())
-        std::copy(std::istream_iterator<char>(input), 
-            std::istream_iterator<char>(), 
-            std::back_inserter(mCalibrationCache));
-
-    length = mCalibrationCache.size();
-    return length ? &mCalibrationCache[0] : nullptr;
+    return nullptr;
   }
 
   void writeCalibrationCache(const void* cache, size_t length) override {
-    std::ofstream output(mCacheFile, std::ios::binary);
-    output.write(reinterpret_cast<const char*>(cache), length);
   }
 
 private:
-  std::string mCacheFile;
-  std::vector<char> mCalibrationCache;
   std::vector<void*> buffers;
   float* main_input;
   float* aux_input;
   int counter;
   FILE* epd_file;
-  static const int CAL_BATCH_SIZE = 1024;
+  static const int CAL_BATCH_SIZE = 256;
   static const int NUM_CAL_BATCH = 10;
   static const std::string calib_file_name;
 };
@@ -449,51 +435,82 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
     Model::id = dev_id;
     cudaSetDevice(Model::id);
 
-    IUffParser* parser;
-    parser = createUffParser();
-    parser->registerInput(main_input_layer.c_str(), 
-        nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNCHW);
-    if(nn_type == 0)
-        parser->registerInput(aux_input_layer.c_str(), 
-            nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNC);
-    parser->registerOutput(value_layer.c_str());
-    parser->registerOutput(policy_layer.c_str());
+    std::string trtName = uff_file_name + "." + 
+                          std::to_string(BATCH_SIZE)+ "_" + 
+                          std::to_string(floatPrecision) +
+                          ".trt";
+    std::ifstream ifs(trtName.c_str(), std::ios::in | std::ios::binary);
 
-    IBuilder* builder = createInferBuilder(logger);
-    if ((floatMode == nvinfer1::DataType::kINT8 && !builder->platformHasFastInt8()) 
-     || (floatMode == nvinfer1::DataType::kHALF && !builder->platformHasFastFp16())) {
-        std::cout << "Device does not support this low precision mode." << std::endl;
-        return;
+    if (!ifs.is_open()) {
+
+        IUffParser* parser;
+        parser = createUffParser();
+        parser->registerInput(main_input_layer.c_str(), 
+            nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNCHW);
+        if(nn_type == 0)
+            parser->registerInput(aux_input_layer.c_str(), 
+                nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNC);
+        parser->registerOutput(value_layer.c_str());
+        parser->registerOutput(policy_layer.c_str());
+
+        IBuilder* builder = createInferBuilder(logger);
+        if ((floatMode == nvinfer1::DataType::kINT8 && !builder->platformHasFastInt8()) 
+         || (floatMode == nvinfer1::DataType::kHALF && !builder->platformHasFastFp16())) {
+            std::cout << "Device does not support this low precision mode." << std::endl;
+            return;
+        }
+
+        INetworkDefinition* network = builder->createNetwork();
+        nvinfer1::DataType loadMode = (floatMode == nvinfer1::DataType::kINT8) ?
+                            nvinfer1::DataType::kFLOAT : floatMode;
+        if(!parser->parse(uff_file_name.c_str(), *network, loadMode)) {
+            std::cout << "Fail to parse network " << uff_file_name << std::endl;
+            return;
+        }
+
+        Int8CacheCalibrator calibrator;
+
+        if (floatMode == nvinfer1::DataType::kHALF) {
+            builder->setFp16Mode(true);
+        } else if (floatMode == nvinfer1::DataType::kINT8) {
+            builder->setInt8Mode(true);
+            builder->setInt8Calibrator(&calibrator);
+        }
+        builder->setMaxBatchSize(BATCH_SIZE);
+        builder->setMaxWorkspaceSize((1 << 30));
+
+        engine = builder->buildCudaEngine(*network);
+        if (!engine) {
+            std::cout << "Unable to create engine" << std::endl;
+            return;
+        }
+
+        network->destroy();
+        builder->destroy();
+        parser->destroy();
+
+        IHostMemory *trtModelStream = engine->serialize();
+        std::ofstream ofs(trtName.c_str(), std::ios::out | std::ios::binary);
+        ofs.write((char*)(trtModelStream->data()), trtModelStream->size());
+        ofs.close();
+        trtModelStream->destroy();
+
+    } else {
+        char* trtModelStream{nullptr};
+        size_t size{0};
+
+        ifs.seekg(0, ifs.end);
+        size = ifs.tellg();
+        ifs.seekg(0, ifs.beg);
+        trtModelStream = new char[size];
+        ifs.read(trtModelStream, size);
+        ifs.close();
+
+
+        IRuntime* infer = createInferRuntime(logger);
+        engine = infer->deserializeCudaEngine(trtModelStream, size, nullptr);
+        if (trtModelStream) delete[] trtModelStream;
     }
-
-    INetworkDefinition* network = builder->createNetwork();
-    nvinfer1::DataType loadMode = (floatMode == nvinfer1::DataType::kINT8) ?
-                        nvinfer1::DataType::kFLOAT : floatMode;
-    if(!parser->parse(uff_file_name.c_str(), *network, loadMode)) {
-        std::cout << "Fail to parse network " << uff_file_name << std::endl;
-        return;
-    }
-
-    std::string cacheName = uff_file_name + ".cache";
-    Int8CacheCalibrator calibrator(cacheName);
-
-    if (floatMode == nvinfer1::DataType::kHALF) {
-        builder->setFp16Mode(true);
-    } else if (floatMode == nvinfer1::DataType::kINT8) {
-        builder->setInt8Mode(true);
-        builder->setInt8Calibrator(&calibrator);
-    }
-    builder->setMaxBatchSize(BATCH_SIZE);
-    builder->setMaxWorkspaceSize((1 << 30));
-
-    engine = builder->buildCudaEngine(*network);
-    if (!engine) {
-        std::cout << "Unable to create engine" << std::endl;
-        return;
-    }
-    network->destroy();
-    builder->destroy();
-    parser->destroy();
 
     context = engine->createExecutionContext();
     numBindings = engine->getNbBindings();
@@ -1079,6 +1096,7 @@ static void fill_input_planes(
             D(sq,(CHANNELS - 3)) = fifty / 100.0;
             D(sq,(CHANNELS - 1)) = 1.0;
         }
+    }
 
 #if 0
         for(int c = 0; c < CHANNELS;c++) {
@@ -1094,8 +1112,6 @@ static void fill_input_planes(
         }
         fflush(stdout);
 #endif
-
-    }
 
 #undef NK_MOVES
 #undef BRQ_MOVES
