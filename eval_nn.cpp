@@ -401,7 +401,6 @@ class Logger : public ILogger {
 class TrtModel : public Model {
     ICudaEngine* engine;
     IExecutionContext* context;
-    IUffParser* parser;
     Logger logger;
     int numBindings;
     nvinfer1::DataType floatMode;
@@ -425,14 +424,6 @@ public:
 };
 
 TrtModel::TrtModel() : Model() {
-    parser = createUffParser();
-    parser->registerInput(main_input_layer.c_str(), 
-        nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNCHW);
-    if(nn_type == 0)
-        parser->registerInput(aux_input_layer.c_str(), 
-            nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNC);
-    parser->registerOutput(value_layer.c_str());
-    parser->registerOutput(policy_layer.c_str());
     context = 0;
     engine = 0;
     numBindings = 0;
@@ -442,22 +433,12 @@ TrtModel::TrtModel() : Model() {
         floatMode = nvinfer1::DataType::kHALF;
     else
         floatMode = nvinfer1::DataType::kINT8;
-    main_input = new float[BATCH_SIZE * 8 * 8 * CHANNELS];
-    aux_input = new float[BATCH_SIZE * NPARAMS];
-    if(nn_type == 0)
-        value = new float[BATCH_SIZE * 3];
-    else
-        value = new float[BATCH_SIZE];
-    policy = new float[BATCH_SIZE * NPOLICY];
 }
 
 TrtModel::~TrtModel() {
     context->destroy();
     engine->destroy();
-    delete[] main_input;
-    delete[] aux_input;
-    delete[] value;
-    delete[] policy;
+    cudaFreeHost(main_input);
 }
 
 void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) {
@@ -467,6 +448,16 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
 
     Model::id = dev_id;
     cudaSetDevice(Model::id);
+
+    IUffParser* parser;
+    parser = createUffParser();
+    parser->registerInput(main_input_layer.c_str(), 
+        nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNCHW);
+    if(nn_type == 0)
+        parser->registerInput(aux_input_layer.c_str(), 
+            nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNC);
+    parser->registerOutput(value_layer.c_str());
+    parser->registerOutput(policy_layer.c_str());
 
     IBuilder* builder = createInferBuilder(logger);
     if ((floatMode == nvinfer1::DataType::kINT8 && !builder->platformHasFastInt8()) 
@@ -507,7 +498,24 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
     context = engine->createExecutionContext();
     numBindings = engine->getNbBindings();
     
-    /*prepare buffer*/
+    /*pinned host memory*/
+    cudaMallocHost((void**)&main_input, 
+        BATCH_SIZE * (8 * 8 * CHANNELS + NPARAMS + 3 + NPOLICY) * sizeof(float));
+
+    if(nn_type == 0) {
+        aux_input = main_input + BATCH_SIZE * 8 * 8 * CHANNELS;
+        value = aux_input + BATCH_SIZE * NPARAMS;
+        policy = value + BATCH_SIZE * 3;
+    } else {
+        policy = main_input + BATCH_SIZE * 8 * 8 * CHANNELS;
+        value = policy + BATCH_SIZE * NPOLICY;
+    }
+
+    /*GPU buffers*/
+    float* pDevice;
+    cudaMalloc((void**)&pDevice, 
+        BATCH_SIZE * (8 * 8 * CHANNELS + NPARAMS + 3 + NPOLICY) * sizeof(float));
+
     for(int i = 0; i < numBindings; i++) {
 
         Dims d = engine->getBindingDimensions(i);
@@ -523,9 +531,8 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
         fflush(stdout);
 #endif
 
-        void* buf;
-        cudaMalloc(&buf, BATCH_SIZE * size * sizeof(float));
-        buffers.push_back(buf);
+        buffers.push_back(pDevice);
+        pDevice += BATCH_SIZE * size;
     }
 
     maini = engine->getBindingIndex(main_input_layer.c_str());
@@ -537,23 +544,21 @@ void TrtModel::predict() {
 
     cudaSetDevice(Model::id);
 
-    cudaMemcpy(buffers[maini], main_input, 
-        BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
     if(nn_type == 0)
-        cudaMemcpy(buffers[auxi], aux_input, 
-            BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
+        cudaMemcpy(buffers[maini], main_input, 
+            BATCH_SIZE * (8 * 8 * CHANNELS + NPARAMS) * sizeof(float), cudaMemcpyHostToDevice);
+    else
+        cudaMemcpy(buffers[maini], main_input, 
+            BATCH_SIZE * (8 * 8 * CHANNELS) * sizeof(float), cudaMemcpyHostToDevice);
 
     context->execute(BATCH_SIZE, buffers.data());
 
-    cudaMemcpy(policy, buffers[policyi], 
-        BATCH_SIZE * NPOLICY * sizeof(float), cudaMemcpyDeviceToHost);
-
     if(nn_type == 0)
         cudaMemcpy(value, buffers[valuei], 
-            BATCH_SIZE * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+            BATCH_SIZE * (3 + NPOLICY) * sizeof(float), cudaMemcpyDeviceToHost);
     else
-        cudaMemcpy(value, buffers[valuei], 
-            BATCH_SIZE * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(policy, buffers[policyi], 
+            BATCH_SIZE * (1 + NPOLICY) * sizeof(float), cudaMemcpyDeviceToHost);
 
     if(nn_type == 0) {
         for(int i = 0;i < n_batch;i++) {
