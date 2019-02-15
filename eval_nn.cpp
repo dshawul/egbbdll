@@ -391,10 +391,7 @@ class TrtModel : public Model {
     int numBindings;
     nvinfer1::DataType floatMode;
     std::vector<void*> buffers;
-    float* main_input;
-    float* aux_input;
-    float* value;
-    float* policy;
+    std::vector<float*> buffers_h;
     int maini, auxi, policyi, valuei;
 public:
     TrtModel();
@@ -402,10 +399,10 @@ public:
     void LoadGraph(const string& uff_file_name, int dev_id, int dev_type);
     void predict();
     float* get_main_input() {
-        return main_input;
+        return buffers_h[maini];
     }
     float* get_aux_input() {
-        return aux_input;
+        return buffers_h[auxi];
     }
 };
 
@@ -424,7 +421,7 @@ TrtModel::TrtModel() : Model() {
 TrtModel::~TrtModel() {
     context->destroy();
     engine->destroy();
-    cudaFreeHost(main_input);
+    cudaFreeHost(buffers_h[0]);
 }
 
 void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) {
@@ -489,12 +486,13 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
         builder->destroy();
         parser->destroy();
 
-        IHostMemory *trtModelStream = engine->serialize();
-        std::ofstream ofs(trtName.c_str(), std::ios::out | std::ios::binary);
-        ofs.write((char*)(trtModelStream->data()), trtModelStream->size());
-        ofs.close();
-        trtModelStream->destroy();
-
+        if(Model::id == 0) {
+            IHostMemory *trtModelStream = engine->serialize();
+            std::ofstream ofs(trtName.c_str(), std::ios::out | std::ios::binary);
+            ofs.write((char*)(trtModelStream->data()), trtModelStream->size());
+            ofs.close();
+            trtModelStream->destroy();
+        }
     } else {
         char* trtModelStream{nullptr};
         size_t size{0};
@@ -515,23 +513,12 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
     context = engine->createExecutionContext();
     numBindings = engine->getNbBindings();
     
-    /*pinned host memory*/
-    cudaMallocHost((void**)&main_input, 
-        BATCH_SIZE * (8 * 8 * CHANNELS + NPARAMS + 3 + NPOLICY) * sizeof(float));
-
-    if(nn_type == 0) {
-        aux_input = main_input + BATCH_SIZE * 8 * 8 * CHANNELS;
-        value = aux_input + BATCH_SIZE * NPARAMS;
-        policy = value + BATCH_SIZE * 3;
-    } else {
-        policy = main_input + BATCH_SIZE * 8 * 8 * CHANNELS;
-        value = policy + BATCH_SIZE * NPOLICY;
-    }
-
-    /*GPU buffers*/
-    float* pDevice;
-    cudaMalloc((void**)&pDevice, 
-        BATCH_SIZE * (8 * 8 * CHANNELS + NPARAMS + 3 + NPOLICY) * sizeof(float));
+    /*Pinned memory*/
+    float* pDevice, *pHost;
+    cudaHostAlloc((void**)&pHost, 
+        BATCH_SIZE * (8 * 8 * CHANNELS + NPARAMS + 3 + NPOLICY) * sizeof(float), 
+        cudaHostAllocMapped);
+    cudaHostGetDevicePointer((void**)&pDevice,(void*)pHost,0);
 
     for(int i = 0; i < numBindings; i++) {
 
@@ -549,7 +536,9 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
 #endif
 
         buffers.push_back(pDevice);
+        buffers_h.push_back(pHost);
         pDevice += BATCH_SIZE * size;
+        pHost += BATCH_SIZE * size;
     }
 
     maini = engine->getBindingIndex(main_input_layer.c_str());
@@ -561,41 +550,27 @@ void TrtModel::predict() {
 
     cudaSetDevice(Model::id);
 
-    if(nn_type == 0)
-        cudaMemcpy(buffers[maini], main_input, 
-            BATCH_SIZE * (8 * 8 * CHANNELS + NPARAMS) * sizeof(float), cudaMemcpyHostToDevice);
-    else
-        cudaMemcpy(buffers[maini], main_input, 
-            BATCH_SIZE * (8 * 8 * CHANNELS) * sizeof(float), cudaMemcpyHostToDevice);
-
     context->execute(BATCH_SIZE, buffers.data());
-
-    if(nn_type == 0)
-        cudaMemcpy(value, buffers[valuei], 
-            BATCH_SIZE * (3 + NPOLICY) * sizeof(float), cudaMemcpyDeviceToHost);
-    else
-        cudaMemcpy(policy, buffers[policyi], 
-            BATCH_SIZE * (1 + NPOLICY) * sizeof(float), cudaMemcpyDeviceToHost);
 
     if(nn_type == 0) {
         for(int i = 0;i < n_batch;i++) {
-            float p = value[3*i+0] * 1.0 + value[3*i+1] * 0.5;
+            float p = buffers_h[valuei][3*i+0] * 1.0 + buffers_h[valuei][3*i+1] * 0.5;
             scores[i] = logit(p);
 
             for(int j = 0;j < policy_size[i];j++) {
                 int idx = policy_index[i * MAX_MOVES + j];
-                float p = policy[i * NPOLICY + idx];
+                float p = buffers_h[policyi][i * NPOLICY + idx];
                 policy_scores[i * MAX_MOVES + j] = p;
             }
         }
     } else {
         for(int i = 0;i < n_batch;i++) {
-            float p = (value[i] + 1.0) * 0.5;
+            float p = (buffers_h[valuei][i] + 1.0) * 0.5;
             scores[i] = logit(p);
 
             for(int j = 0;j < policy_size[i];j++) {
                 int idx = policy_index[i * MAX_MOVES + j];
-                float p = policy[i * NPOLICY + idx];
+                float p = buffers_h[policyi][i * NPOLICY + idx];
                 policy_scores[i * MAX_MOVES + j] = p;
             }
         }
