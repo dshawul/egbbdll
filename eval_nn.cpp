@@ -22,6 +22,10 @@
 
 #define AZPOLICY 1
 
+enum NNTYPE {
+    DEFAULT=0, LCZERO, SIMPLE
+};
+
 static int CHANNELS;
 static int NPOLICY;
 static const int NPARAMS = 5;
@@ -36,7 +40,7 @@ static int n_searchers;
 static VOLATILE int n_active_searchers;
 static VOLATILE int chosen_device = 0;
 static int delayms = 0;
-static int nn_type = 0;
+static int nn_type = DEFAULT;
 static int floatPrecision = 1;
 static bool is_trt = false;
 
@@ -200,7 +204,7 @@ public:
 };
 
 TfModel::TfModel() : Model() {
-    if(nn_type == 0)
+    if(nn_type == DEFAULT)
         main_input = new Tensor(DT_FLOAT, {BATCH_SIZE, 8, 8, CHANNELS});
     else
         main_input = new Tensor(DT_FLOAT, {BATCH_SIZE, CHANNELS, 8, 8});
@@ -237,11 +241,19 @@ void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type)
 void TfModel::predict() {
     std::vector<Tensor> outputs;
 
-    if(nn_type == 0) {
-        std::vector<std::pair<string, Tensor> > inputs = {
-            {main_input_layer, *main_input},
-            {aux_input_layer, *aux_input}
-        };
+    if(nn_type == DEFAULT || nn_type == SIMPLE) {
+
+        std::vector<std::pair<string, Tensor> > inputs;
+        if(nn_type == DEFAULT) {
+            inputs = {
+                {main_input_layer, *main_input},
+                {aux_input_layer, *aux_input}
+            };
+        } else {
+            inputs = {
+                {main_input_layer, *main_input}
+            };
+        }
 
         TF_CHECK_OK( session->Run(inputs, {value_layer,policy_layer}, {}, &outputs) );
 
@@ -297,7 +309,7 @@ public:
     void* buf;
     cudaMalloc(&buf, CAL_BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS);
     buffers.push_back(buf);
-    if(nn_type == 0) {
+    if(nn_type == DEFAULT) {
         cudaMalloc(&buf, CAL_BATCH_SIZE * sizeof(float) * NPARAMS);
         buffers.push_back(buf);
     }
@@ -315,7 +327,7 @@ public:
 
   ~Int8CacheCalibrator() override {
     cudaFree(buffers[0]);
-    if(nn_type == 0)
+    if(nn_type == DEFAULT)
         cudaFree(buffers[1]);
     delete[] main_input;
     delete[] aux_input;
@@ -347,7 +359,7 @@ public:
     cudaMemcpy(buffers[0], main_input, 
         CAL_BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
     bindings[0] = buffers[0];
-    if(nn_type == 0) {
+    if(nn_type == DEFAULT) {
         cudaMemcpy(buffers[1], aux_input, 
             CAL_BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
         bindings[1] = buffers[1];
@@ -444,7 +456,7 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
         parser = createUffParser();
         parser->registerInput(main_input_layer.c_str(), 
             nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNCHW);
-        if(nn_type == 0)
+        if(nn_type == DEFAULT)
             parser->registerInput(aux_input_layer.c_str(), 
                 nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNC);
         parser->registerOutput(value_layer.c_str());
@@ -552,7 +564,7 @@ void TrtModel::predict() {
 
     context->execute(BATCH_SIZE, buffers.data());
 
-    if(nn_type == 0) {
+    if(nn_type == DEFAULT || nn_type == SIMPLE) {
         for(int i = 0;i < n_batch;i++) {
             float p = buffers_h[valuei][3*i+0] * 1.0 + buffers_h[valuei][3*i+1] * 0.5;
             scores[i] = logit(p);
@@ -622,8 +634,11 @@ DLLExport void CDECL load_neural_network(
     init_index_table();
 
     /*constants based on network type*/
-    if(nn_type == 0) {
-        CHANNELS = 24;
+    if(nn_type == DEFAULT || nn_type == SIMPLE) {
+        if(nn_type == DEFAULT)
+            CHANNELS = 24;
+        else
+            CHANNELS = 12;
         value_layer = "value/Softmax";
 #if AZPOLICY
         policy_layer = "policy/Reshape";
@@ -763,7 +778,7 @@ DLLExport int CDECL probe_neural_network(
             }
 
 #if AZPOLICY
-            if(nn_type == 0) {
+            if(nn_type == DEFAULT || nn_type == SIMPLE) {
                 index = from * 73;
                 if(prom) {
                     prom = PIECE(prom);
@@ -872,7 +887,7 @@ static void fill_input_planes(
     */
 #define DHWC(sq,C)     data[rank(sq) * 8 * CHANNELS + file(sq) * CHANNELS + C]
 #define DCHW(sq,C)     data[C * 8 * 8 + rank(sq) * 8 + file(sq)]
-#define D(sq,C)        ( (is_trt || (nn_type > 0) ) ? DCHW(sq,C) : DHWC(sq,C) )
+#define D(sq,C)        ( (is_trt || (nn_type > DEFAULT) ) ? DCHW(sq,C) : DHWC(sq,C) )
 
 #define NK_MOVES(dir, off) {                    \
         to = sq + dir;                          \
@@ -890,7 +905,7 @@ static void fill_input_planes(
 
     memset(data,  0, sizeof(float) * 8 * 8 * CHANNELS);
 
-    if(nn_type == 0) {
+    if(nn_type == DEFAULT) {
 
         int board[128];
         int ksq = SQ6488(square[player]);
@@ -1020,7 +1035,15 @@ static void fill_input_planes(
                     adata[pc - queen]--;
             }
         }
-
+    } else if (nn_type == SIMPLE) {
+        for(int i = 0; (pc = piece[i]) != _EMPTY; i++) {
+            sq = SQ6488(square[i]);
+            if(player == _BLACK) {
+                sq = MIRRORR(sq);
+                pc = invert_color(pc);
+            }
+            D(sq,(pc-1)) = 1.0f;
+        }
     } else {
 
         static const int piece_map[2][12] = {
