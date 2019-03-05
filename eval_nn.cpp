@@ -317,11 +317,13 @@ public:
     main_input = new float[CAL_BATCH_SIZE * 8 * 8 * CHANNELS];
     aux_input = new float[CAL_BATCH_SIZE * NPARAMS];
 
-    epd_file = fopen(calib_file_name.c_str(),"r");
-    if(!epd_file) {
-        printf("Epd file needed for calibration not found!\n");
-        fflush(stdout);
-        exit(0);
+    if (floatPrecision == 2) {
+        epd_file = fopen(calib_file_name.c_str(),"r");
+        if(!epd_file) {
+            printf("Epd file needed for calibration not found!\n");
+            fflush(stdout);
+            exit(0);
+        }
     }
   }
 
@@ -331,7 +333,8 @@ public:
         cudaFree(buffers[1]);
     delete[] main_input;
     delete[] aux_input;
-    fclose(epd_file);
+    if(epd_file)
+        fclose(epd_file);
   }
   
   int getBatchSize() const override {
