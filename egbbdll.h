@@ -26,17 +26,17 @@ DLLExport int  CDECL probe_egbb_5men(int player, int w_king, int b_king,
                int piece2 = _EMPTY, int square2 = 0,
                int piece3 = _EMPTY, int square3 = 0
                );
-DLLExport void CDECL load_egbb_5men(char* path,int cache_size = 4194304,int load_options = LOAD_4MEN);
+DLLExport void CDECL load_egbb_5men(char* path,int cache_size = 4194304, int load_options = LOAD_4MEN);
 /*X men*/
 DLLExport int  CDECL probe_egbb_fen(char* fen);
 DLLExport int  CDECL probe_egbb_xmen(int player, int* piece, int* square);
-DLLExport void CDECL load_egbb_xmen(char* path,int cache_size = 4194304,int load_options = LOAD_4MEN);
+DLLExport void CDECL load_egbb_xmen(char* path,int cache_size = 4194304, int load_options = LOAD_4MEN);
 /*NN eval*/
 DLLExport void CDECL set_num_active_searchers(int n_searchers);
 DLLExport int  CDECL probe_neural_network(int player, int cast, int fifty, int hist, int* draw, int* piece, 
-										 int* square, int* moves = 0, int* probs = 0);
-DLLExport void CDECL load_neural_network(char* path, int n_threads = 1, int n_devices = 1, int dev_type = CPU, 
-                                         int delay = 0, int float_type = 1, int nn_type = 0);
+                                        int* square, int* moves = 0, int* probs = 0, int nmoves = 0, UBMP64 hash_key = 0);
+DLLExport void CDECL load_neural_network(char* path, int nn_cache_size = 4194304, int n_threads = 1, int n_devices = 1, int dev_type = CPU, 
+                                        int delay = 0, int float_type = 1, int nn_type = 0);
 /*private*/
 DLLExport void CDECL load_egbb_into_ram(int side,int* piece);
 DLLExport void CDECL unload_egbb_from_ram(int side,int* piece);

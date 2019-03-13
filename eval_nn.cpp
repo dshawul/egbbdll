@@ -142,7 +142,7 @@ class Model {
 public:
     int* scores;
     float* policy_scores;
-    int* policy_index;
+    unsigned short* policy_index;
     int* policy_size;
     VOLATILE int wait;
     VOLATILE int n_batch;
@@ -152,7 +152,7 @@ public:
     Model() {
         scores = new int[BATCH_SIZE];
         policy_scores = new float[BATCH_SIZE * MAX_MOVES];
-        policy_index = new int[BATCH_SIZE * MAX_MOVES];
+        policy_index = new unsigned short[BATCH_SIZE * MAX_MOVES];
         policy_size = new int[BATCH_SIZE];
         memset(policy_size,0,BATCH_SIZE * sizeof(int));
         n_batch = 0;
@@ -594,6 +594,69 @@ void TrtModel::predict() {
 
 #endif
 
+/* 
+  Neural network caching
+*/
+typedef struct tagNNHASH {
+    UBMP64 hash_key;
+    BMP32 value;
+    BMP32 policy[MAX_MOVES-3];
+    UBMP16 index[MAX_MOVES];
+} NNHASH, *PNNHASH;
+
+static PNNHASH nn_cache;
+static UBMP32 nn_cache_mask;
+
+static void allocate_nn_cache(UBMP32 sizeb) {
+    UBMP32 size = 1, size_max = sizeb / sizeof(NNHASH);
+    while(2 * size <= size_max) size *= 2;
+    nn_cache_mask = size - 1;
+    aligned_reserve<NNHASH>(nn_cache,size);
+
+    printf("nn_cache %d X %d = %.1f MB\n",size,int(sizeof(NNHASH)),
+        (size * sizeof(NNHASH)) / double(1024 * 1024));
+    fflush(stdout);
+}
+
+static void store_nn_cache(const UBMP64 hash_key, const int value, 
+    const int* policy, const UBMP16* index, const int count
+    ) {
+    UBMP32 key = UBMP32(hash_key & nn_cache_mask);
+    PNNHASH nn_hash = nn_cache + key; 
+    
+    if(nn_hash->hash_key != hash_key) {
+        nn_hash->hash_key = hash_key;
+        nn_hash->value = value;
+        memcpy(nn_hash->policy, policy, count * sizeof(int));
+        memcpy(nn_hash->index, index, count * sizeof(BMP16));
+    }
+}
+
+static bool retrieve_nn_cache(const UBMP64 hash_key, int& value, 
+    int* policy, const UBMP16* index, const int count
+    ) {
+    UBMP32 key = UBMP32(hash_key & nn_cache_mask);
+    PNNHASH nn_hash = nn_cache + key; 
+
+    if(nn_hash->hash_key == hash_key) {
+        value = nn_hash->value;
+        for(int i = 0; i < count; i++) {
+            if(index[i] == nn_hash->index[i]) {
+                policy[i] = nn_hash->policy[i];
+            } else {
+                for(int j = 0; j < count; j++) {
+                    if(index[i] == nn_hash->index[j]) {
+                        policy[i] = nn_hash->policy[j];
+                        break;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 /*
   Thread procedure for loading NN
 */
@@ -611,7 +674,12 @@ static int add_to_batch(
     int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, int batch_id);
 
 DLLExport void CDECL load_neural_network(
-    char* path, int n_threads, int n_devices, int dev_type, int delay, int float_type, int lnn_type) {
+    char* path, int nn_cache_size, int n_threads, int n_devices, 
+    int dev_type, int delay, int float_type, int lnn_type
+    ) {
+
+    /*Allocate cache*/
+    allocate_nn_cache(nn_cache_size);
 
     /*Message*/
     printf("Loading neural network : %s\n",path);
@@ -740,34 +808,13 @@ static int add_to_batch(
 }
 
 DLLExport int CDECL probe_neural_network(
-    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, int* moves, int* probs) {
-
-    //choose batch id
-    int batch_id;
-    l_lock(searcher_lock);
-    do {
-        for(batch_id = chosen_device;batch_id < N_DEVICES; batch_id++) {
-            Model* net = netModel[batch_id];
-            if(net->n_batch_i < BATCH_SIZE) {
-                net->n_batch_i++;
-                break;
-            }
-        }
-        chosen_device = 0;
-    } while(batch_id + 1 > N_DEVICES);
-
-    chosen_device = batch_id + 1;
-    if(chosen_device == N_DEVICES)
-        chosen_device = 0;
-    l_unlock(searcher_lock);
-
-    //get identifier
-    Model* net = netModel[batch_id];
-
-    //add to batch
-    int offset = add_to_batch(player,cast,fifty,hist,draw,piece,square,batch_id);
+    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, 
+    int* moves, int* probs, int nmoves, UBMP64 hash_key
+    ) {
 
     //policy
+    unsigned short pindex[MAX_MOVES];
+
     if(moves) {
         int* s = moves, cnt = 0;
         while(*s >= 0) {
@@ -807,10 +854,47 @@ DLLExport int CDECL probe_neural_network(
                 index = move_index_table[compi];
             }
 
-            net->policy_index[offset * MAX_MOVES + cnt] = index;
+            pindex[cnt] = index;
             cnt++;
         }
-        net->policy_size[offset] = cnt;
+    }
+
+    //retrieve from cache
+    if(hash_key > 0) {
+        int value;
+        if(retrieve_nn_cache(hash_key,value,probs,pindex,nmoves))
+            return value;
+    }
+
+    //choose batch id
+    int batch_id;
+    l_lock(searcher_lock);
+    do {
+        for(batch_id = chosen_device;batch_id < N_DEVICES; batch_id++) {
+            Model* net = netModel[batch_id];
+            if(net->n_batch_i < BATCH_SIZE) {
+                net->n_batch_i++;
+                break;
+            }
+        }
+        chosen_device = 0;
+    } while(batch_id + 1 > N_DEVICES);
+
+    chosen_device = batch_id + 1;
+    if(chosen_device == N_DEVICES)
+        chosen_device = 0;
+    l_unlock(searcher_lock);
+
+    //get identifier
+    Model* net = netModel[batch_id];
+
+    //add to batch
+    int offset = add_to_batch(player,cast,fifty,hist,draw,piece,square,batch_id);
+
+    //policy
+    if(moves) {
+        memcpy(net->policy_index + offset * MAX_MOVES, pindex, nmoves * sizeof(short));
+        net->policy_size[offset] = nmoves;
     }
 
     //pause threads till eval completes
@@ -848,6 +932,11 @@ DLLExport int CDECL probe_neural_network(
         }
     }
 
+    //store in cache
+    int value = net->scores[offset];
+    if(hash_key > 0)
+        store_nn_cache(hash_key,value,probs,pindex,nmoves);
+
     //Wait until all eval calls are finished
     l_lock(searcher_lock);
     net->n_finished_threads++;
@@ -865,7 +954,7 @@ DLLExport int CDECL probe_neural_network(
         SLEEP();
     }
 
-    return net->scores[offset];
+    return value;
 }
 
 #undef SLEEP
@@ -881,7 +970,9 @@ DLLExport void CDECL set_num_active_searchers(int n_searchers) {
    Fill input planes
 */
 static void fill_input_planes(
-    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, float* data, float* adata) {
+    int player, int cast, int fifty, int hist, int* draw, 
+    int* piece, int* square, float* data, float* adata
+    ) {
     
     int pc, col, sq, to;
 
