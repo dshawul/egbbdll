@@ -133,7 +133,8 @@ static void init_index_table() {
 Fill input planes
 */
 static void fill_input_planes(
-    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, float* data, float* adata);
+    int player, int cast, int fifty, int hist, int* draw, 
+    int* piece, int* square, float* data, float* adata);
 
 /*
   Network model
@@ -600,7 +601,7 @@ void TrtModel::predict() {
 typedef struct tagNNHASH {
     UBMP64 hash_key;
     BMP32 value;
-    BMP32 policy[MAX_MOVES-3];
+    float policy[MAX_MOVES-3];
     UBMP16 index[MAX_MOVES];
 } NNHASH, *PNNHASH;
 
@@ -619,7 +620,7 @@ static void allocate_nn_cache(UBMP32 sizeb) {
 }
 
 static void store_nn_cache(const UBMP64 hash_key, const int value, 
-    const int* policy, const UBMP16* index, const int count
+    const float* policy, const UBMP16* index, const int count
     ) {
     UBMP32 key = UBMP32(hash_key & nn_cache_mask);
     PNNHASH nn_hash = nn_cache + key; 
@@ -627,13 +628,13 @@ static void store_nn_cache(const UBMP64 hash_key, const int value,
     if(nn_hash->hash_key != hash_key) {
         nn_hash->hash_key = hash_key;
         nn_hash->value = value;
-        memcpy(nn_hash->policy, policy, count * sizeof(int));
+        memcpy(nn_hash->policy, policy, count * sizeof(float));
         memcpy(nn_hash->index, index, count * sizeof(BMP16));
     }
 }
 
 static bool retrieve_nn_cache(const UBMP64 hash_key, int& value, 
-    int* policy, const UBMP16* index, const int count
+    float* policy, const UBMP16* index, const int count
     ) {
     UBMP32 key = UBMP32(hash_key & nn_cache_mask);
     PNNHASH nn_hash = nn_cache + key; 
@@ -809,7 +810,7 @@ static int add_to_batch(
 
 DLLExport int CDECL probe_neural_network(
     int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, 
-    int* moves, int* probs, int nmoves, UBMP64 hash_key
+    int* moves, float* probs, int nmoves, UBMP64 hash_key
     ) {
 
     //policy
@@ -925,12 +926,8 @@ DLLExport int CDECL probe_neural_network(
     }
 
     //policy
-    if(moves) {
-        for(int j = 0;j < net->policy_size[offset];j++) {
-            float p = net->policy_scores[offset * MAX_MOVES + j];
-            probs[j] = p * 10000;
-        }
-    }
+    if(moves)
+        memcpy(probs, net->policy_scores + offset * MAX_MOVES, nmoves * sizeof(float));
 
     //store in cache
     int value = net->scores[offset];

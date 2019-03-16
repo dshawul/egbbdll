@@ -237,6 +237,10 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 
     init_indices();
     LRU_CACHE::alloc( cache_size );
+    printf("egbb_cache %d X %d = %.1f MB\n",int(cache_size / sizeof(CACHE)),
+        int(sizeof(CACHE)), cache_size / double(1024 * 1024));
+    fflush(stdout);
+
     l_create(searcher_lock);
 
     printf("Loading egbbs....");

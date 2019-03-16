@@ -34,7 +34,7 @@ DLLExport void CDECL load_egbb_xmen(char* path,int cache_size = 4194304, int loa
 /*NN eval*/
 DLLExport void CDECL set_num_active_searchers(int n_searchers);
 DLLExport int  CDECL probe_neural_network(int player, int cast, int fifty, int hist, int* draw, int* piece, 
-                                        int* square, int* moves = 0, int* probs = 0, int nmoves = 0, UBMP64 hash_key = 0);
+                                        int* square, int* moves = 0, float* probs = 0, int nmoves = 0, UBMP64 hash_key = 0);
 DLLExport void CDECL load_neural_network(char* path, int nn_cache_size = 4194304, int n_threads = 1, int n_devices = 1, int dev_type = CPU, 
                                         int delay = 0, int float_type = 1, int nn_type = 0);
 /*private*/
