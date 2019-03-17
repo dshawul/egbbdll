@@ -1159,8 +1159,8 @@ static void fill_input_planes(
             }
             if(draw && draw[h]) {
                 int off = 13 * h + 12;
-                for(int sq = 0; sq < 64; sq++) {
-                    sq = SQ6488(sq);
+                for(int i = 0; i < 64; i++) {
+                    sq = SQ6488(i);
                     D(sq,off) = 1.0;
                 }
             }
