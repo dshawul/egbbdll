@@ -810,7 +810,7 @@ static int add_to_batch(
 
 DLLExport int CDECL probe_neural_network(
     int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, 
-    int* moves, float* probs, int nmoves, UBMP64 hash_key
+    int* moves, float* probs, int nmoves, UBMP64 hash_key, bool hard_probe
     ) {
 
     //policy
@@ -861,7 +861,7 @@ DLLExport int CDECL probe_neural_network(
     }
 
     //retrieve from cache
-    if(hash_key > 0) {
+    if(!hard_probe) {
         int value;
         if(retrieve_nn_cache(hash_key,value,probs,pindex,nmoves))
             return value;
@@ -931,8 +931,7 @@ DLLExport int CDECL probe_neural_network(
 
     //store in cache
     int value = net->scores[offset];
-    if(hash_key > 0)
-        store_nn_cache(hash_key,value,probs,pindex,nmoves);
+    store_nn_cache(hash_key,value,probs,pindex,nmoves);
 
     //Wait until all eval calls are finished
     l_lock(searcher_lock);
