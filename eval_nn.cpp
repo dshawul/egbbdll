@@ -20,19 +20,10 @@
 #include "common.h"
 #include "egbbdll.h"
 
-#define AZPOLICY 1
-
-enum NNTYPE {
-    DEFAULT=0, LCZERO, SIMPLE
-};
-
-static int CHANNELS;
-static int NPOLICY;
-static const int NPARAMS = 5;
-static const string main_input_layer = "main_input";
-static const string aux_input_layer = "aux_input";
-static string policy_layer;
-static string value_layer;
+static std::vector<string> input_layer_names;
+static std::vector<string> output_layer_names;
+static std::vector<std::tuple<int,int,int>> input_layer_shapes;
+static std::vector<std::tuple<int,int,int>> output_layer_shapes;
 
 static int N_DEVICES;
 static int BATCH_SIZE;
@@ -40,108 +31,16 @@ static int n_searchers;
 static VOLATILE int n_active_searchers;
 static VOLATILE int chosen_device = 0;
 static int delayms = 0;
-static int nn_type = DEFAULT;
+static int NVALUE = 3;
+static int NPOLICY = 4672;
 static int floatPrecision = 1;
-static bool is_trt = false;
-
-/*
-   Convert winning percentage to centi-pawns
-*/
-static const double Kfactor = -log(10.0) / 400.0;
-
-double logistic(double score) {
-    return 1 / (1 + exp(Kfactor * score));
-}
-
-static inline int logit(double p) {
-    if(p < 1e-15) p = 1e-15;
-    else if(p > 1 - 1e-15) p = 1 - 1e-15;
-    return int(log((1 - p) / p) / Kfactor);
-}
-
-/*
-Move policy format
-*/
-
-/* 1. AlphaZero format: 56=queen moves, 8=knight moves, 9 pawn promotions */
-static const UBMP8 t_move_map[] = {
-  0,  0,  0,  0,  0,  0,  0,  0,  0, 35,  0,  0,  0,  0,  0,  0,
- 27,  0,  0,  0,  0,  0,  0, 55,  0,  0, 36,  0,  0,  0,  0,  0,
- 26,  0,  0,  0,  0,  0, 54,  0,  0,  0,  0, 37,  0,  0,  0,  0,
- 25,  0,  0,  0,  0, 53,  0,  0,  0,  0,  0,  0, 38,  0,  0,  0,
- 24,  0,  0,  0, 52,  0,  0,  0,  0,  0,  0,  0,  0, 39,  0,  0,
- 23,  0,  0, 51,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 40, 60,
- 22, 56, 50,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 61, 41,
- 21, 49, 57,  0,  0,  0,  0,  0,  0,  7,  8,  9, 10, 11, 12, 13,
-  0,  0,  1,  2,  3,  4,  5,  6,  0,  0,  0,  0,  0,  0, 63, 48,
- 14, 28, 59,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 47, 62,
- 15, 58, 29,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 46,  0,  0,
- 16,  0,  0, 30,  0,  0,  0,  0,  0,  0,  0,  0, 45,  0,  0,  0,
- 17,  0,  0,  0, 31,  0,  0,  0,  0,  0,  0, 44,  0,  0,  0,  0,
- 18,  0,  0,  0,  0, 32,  0,  0,  0,  0, 43,  0,  0,  0,  0,  0,
- 19,  0,  0,  0,  0,  0, 33,  0,  0, 42,  0,  0,  0,  0,  0,  0,
- 20,  0,  0,  0,  0,  0,  0, 34,  0,  0,  0,  0,  0,  0,  0,  0
-};
-static const UBMP8* const move_map = t_move_map + 0x80;
-
-/* 2. LcZero format: flat move representation */
-static const int MOVE_TAB_SIZE = 64*64+8*3*3;
-
-static unsigned short move_index_table[MOVE_TAB_SIZE];
-
-static void init_index_table() {
-
-    memset(move_index_table, 0, MOVE_TAB_SIZE * sizeof(short));
-
-    int cnt = 0;
-
-    for(int from = 0; from < 64; from++) {
-
-        int from88 = SQ6488(from);
-        for(int to = 0; to < 64; to++) {
-            int to88 = SQ6488(to);
-            if(from != to) {
-                if(sqatt_pieces(to88 - from88))
-                    move_index_table[from * 64 + to] = cnt++;
-            }
-        }
-
-    }
-
-    for(int from = 48; from < 56; from++) {
-        int idx = 4096 + file64(from) * 9;
-
-        if(from > 48) {
-            move_index_table[idx+0] = cnt++;
-            move_index_table[idx+1] = cnt++;
-            move_index_table[idx+2] = cnt++;
-        }
-
-        move_index_table[idx+3] = cnt++;
-        move_index_table[idx+4] = cnt++;
-        move_index_table[idx+5] = cnt++;
-
-        if(from < 55) {
-            move_index_table[idx+6] = cnt++;
-            move_index_table[idx+7] = cnt++;
-            move_index_table[idx+8] = cnt++;
-        }
-    }
-}
-
-/*
-Fill input planes
-*/
-static void fill_input_planes(
-    int player, int cast, int fifty, int hist, int* draw, 
-    int* piece, int* square, float* data, float* adata);
 
 /*
   Network model
 */
 class Model {
 public:
-    int* scores;
+    float* scores;
     float* policy_scores;
     unsigned short* policy_index;
     int* policy_size;
@@ -151,7 +50,7 @@ public:
     VOLATILE int n_finished_threads;
     int id;
     Model() {
-        scores = new int[BATCH_SIZE];
+        scores = new float[BATCH_SIZE * NVALUE];
         policy_scores = new float[BATCH_SIZE * MAX_MOVES];
         policy_index = new unsigned short[BATCH_SIZE * MAX_MOVES];
         policy_size = new int[BATCH_SIZE];
@@ -168,8 +67,8 @@ public:
         delete[] policy_index;
         delete[] policy_size;
     }
-    virtual float* get_main_input() = 0;
-    virtual float* get_aux_input() = 0;
+    virtual float* get_input_buffer(int) = 0;
+    virtual int get_input_size(int) = 0;
     virtual void predict() = 0;
     virtual void LoadGraph(const string&, int, int) = 0;
     static char path[256];
@@ -188,32 +87,29 @@ static Model** netModel;
 using namespace tensorflow;
 
 class TfModel : public Model {
-    Tensor* main_input;
-    Tensor* aux_input;
+    Tensor** input_layers;
     Session* session;
 public:
     TfModel();
     ~TfModel();
     void LoadGraph(const string& graph_file_name, int dev_id, int dev_type);
     void predict();
-    float* get_main_input() {
-        return (float*)(main_input->tensor_data().data());
+    float* get_input_buffer(int idx) {
+        return (float*)(input_layers[idx]->tensor_data().data());
     }
-    float* get_aux_input() {
-        return (float*)(aux_input->tensor_data().data());
+    int get_input_size(int idx) {
+        return input_layers[idx]->NumElements() / BATCH_SIZE;
     }
 };
 
 TfModel::TfModel() : Model() {
-    if(nn_type == DEFAULT)
-        main_input = new Tensor(DT_FLOAT, {BATCH_SIZE, 8, 8, CHANNELS});
-    else
-        main_input = new Tensor(DT_FLOAT, {BATCH_SIZE, CHANNELS, 8, 8});
-    aux_input = new Tensor(DT_FLOAT, {BATCH_SIZE, NPARAMS});
+    input_layers = new Tensor*[input_layer_names.size()];
 }
 TfModel::~TfModel() {
-    delete main_input;
-    delete aux_input;
+    for(int n = 0; n < input_layer_names.size(); n++) {
+        delete[] input_layers[n];
+    }
+    delete[] input_layers;
 }
 void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type) {
     Model::id = dev_id;
@@ -226,6 +122,30 @@ void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type)
     graph::SetDefaultDevice(dev_name, &graph_def);
     printf("Loading graph on %s\n",dev_name.c_str());
     fflush(stdout);
+
+    for (auto &node: *graph_def.mutable_node()) {
+        for(int n = 0; n < input_layer_names.size(); n++) {
+            if(node.name() == input_layer_names[n]) {
+                TensorShape nshape({BATCH_SIZE});
+                auto shape = node.attr().at("shape").shape();
+                printf("Input %d: %s (-1", n, node.name().c_str());
+                for (int i = 1; i < shape.dim_size(); i++) {
+                    printf(",%d",(int)shape.dim(i).size());
+                    nshape.AddDim(shape.dim(i).size());
+                }
+                printf(")\n");
+                input_layers[n] = new Tensor(DT_FLOAT, nshape);
+            }
+            fflush(stdout);
+        }
+        for(int n = 0; n < output_layer_names.size(); n++) {
+            if(node.name() == output_layer_names[n]) {
+                printf("Output %d: %s\n", n, node.name().c_str());
+                fflush(stdout);
+            }
+        }
+    }
+    
 
 #if 0
     std::cout << "=============================" << std::endl;
@@ -241,56 +161,33 @@ void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type)
 
 void TfModel::predict() {
     std::vector<Tensor> outputs;
+    std::vector<std::pair<string, Tensor> > inps;
+    std::vector<string> outs;
 
-    if(nn_type == DEFAULT || nn_type == SIMPLE) {
+    for(int n = 0; n < input_layer_names.size(); n++) {
+        std::pair<string, Tensor> pr( 
+            input_layer_names[n], *(input_layers[n]) );
+        inps.push_back(pr);
+    }
+    for(int n = 0; n < output_layer_names.size(); n++)
+        outs.push_back(output_layer_names[n]);
 
-        std::vector<std::pair<string, Tensor> > inputs;
-        if(nn_type == DEFAULT) {
-            inputs = {
-                {main_input_layer, *main_input},
-                {aux_input_layer, *aux_input}
-            };
-        } else {
-            inputs = {
-                {main_input_layer, *main_input}
-            };
+    TF_CHECK_OK( session->Run(inps, outs, {}, &outputs) );
+
+    auto pp0 = outputs[0].matrix<float>();
+    auto pp1 = outputs[1].matrix<float>();
+    for(int i = 0;i < n_batch; i++) {
+
+        for(int j = 0;j < NVALUE;j++) {
+            scores[i * NVALUE + j] = pp0(i,j);
         }
 
-        TF_CHECK_OK( session->Run(inputs, {value_layer,policy_layer}, {}, &outputs) );
-
-        auto pp0 = outputs[0].matrix<float>();
-        auto pp1 = outputs[1].matrix<float>();
-        for(int i = 0;i < n_batch; i++) {
-            float p = pp0(i,0) * 1.0 + pp0(i,1) * 0.5;
-            scores[i] = logit(p);
-
-            for(int j = 0;j < policy_size[i];j++) {
-                int idx = policy_index[i * MAX_MOVES + j];
-                float p = pp1(i,idx);
-                policy_scores[i * MAX_MOVES + j] = p;
-            }
-        }
-    } else {
-        std::vector<std::pair<string, Tensor> > inputs = {
-            {main_input_layer, *main_input}
-        };
-
-        TF_CHECK_OK( session->Run(inputs, {value_layer,policy_layer}, {}, &outputs) );
-
-        auto pp0 = outputs[0].matrix<float>();
-        auto pp1 = outputs[1].matrix<float>();
-        for(int i = 0;i < n_batch; i++) {
-            float p = (pp0(i,0) + 1.0) * 0.5;
-            scores[i] = logit(p);
-
-            for(int j = 0;j < policy_size[i];j++) {
-                int idx = policy_index[i * MAX_MOVES + j];
-                float p = pp1(i,idx);
-                policy_scores[i * MAX_MOVES + j] = p;
-            }
+        for(int j = 0;j < policy_size[i];j++) {
+            int idx = policy_index[i * MAX_MOVES + j];
+            float p = pp1(i,idx);
+            policy_scores[i * MAX_MOVES + j] = p;
         }
     }
-
 }
 #endif
 
@@ -308,20 +205,22 @@ public:
   Int8CacheCalibrator() {
 
     void* buf;
-    cudaMalloc(&buf, CAL_BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS);
-    buffers.push_back(buf);
-    if(nn_type == DEFAULT) {
-        cudaMalloc(&buf, CAL_BATCH_SIZE * sizeof(float) * NPARAMS);
+    for(int n = 0; n < input_layer_names.size(); n++) {
+        size_t sz = std::get<0>(input_layer_shapes[n]) *
+                    std::get<1>(input_layer_shapes[n]) *
+                    std::get<2>(input_layer_shapes[n]);
+        cudaMalloc(&buf, CAL_BATCH_SIZE * sizeof(float) * sz);
         buffers.push_back(buf);
+        buf = (float*) malloc(CAL_BATCH_SIZE * sizeof(float) * sz);
+        buffers_h.push_back(buf);
     }
+
     counter = 0;
-    main_input = new float[CAL_BATCH_SIZE * 8 * 8 * CHANNELS];
-    aux_input = new float[CAL_BATCH_SIZE * NPARAMS];
 
     if (floatPrecision == 2) {
         epd_file = fopen(calib_file_name.c_str(),"r");
         if(!epd_file) {
-            printf("Epd file needed for calibration not found!\n");
+            printf("Calibration file not found!\n");
             fflush(stdout);
             exit(0);
         }
@@ -329,11 +228,10 @@ public:
   }
 
   ~Int8CacheCalibrator() override {
-    cudaFree(buffers[0]);
-    if(nn_type == DEFAULT)
-        cudaFree(buffers[1]);
-    delete[] main_input;
-    delete[] aux_input;
+    for(int n = 0; n < input_layer_names.size(); n++) {
+        cudaFree(buffers[n]);
+        free(buffers_h[n]);
+    }
     if(epd_file)
         fclose(epd_file);
   }
@@ -348,25 +246,15 @@ public:
 
     std::cout << "Calibrating on Batch " << counter + 1 << " of " << NUM_CAL_BATCH << "\r";
 
-    int piece[33],square[33],isdraw[1],hist=1,player,castle,fifty;
-    char fen[MAX_STR];
-    for(int i = 0; i < CAL_BATCH_SIZE; i++) {
-        if(!fgets(fen,MAX_STR,epd_file))
-            return false;
-        decode_fen(fen,player,castle,fifty,piece,square);
-
-        float* minput = main_input + i * (8 * 8 * CHANNELS);
-        float* ainput = aux_input + i * (NPARAMS);
-        fill_input_planes(player,castle,fifty,hist,isdraw,piece,square,minput,ainput);
-    }
-
-    cudaMemcpy(buffers[0], main_input, 
-        CAL_BATCH_SIZE * sizeof(float) * 8 * 8 * CHANNELS, cudaMemcpyHostToDevice);
-    bindings[0] = buffers[0];
-    if(nn_type == DEFAULT) {
-        cudaMemcpy(buffers[1], aux_input, 
-            CAL_BATCH_SIZE * sizeof(float) * NPARAMS, cudaMemcpyHostToDevice);
-        bindings[1] = buffers[1];
+    for(int n = 0; n < input_layer_names.size(); n++) {
+        size_t sz = std::get<0>(input_layer_shapes[n]) *
+                    std::get<1>(input_layer_shapes[n]) *
+                    std::get<2>(input_layer_shapes[n]);
+        for(int i = 0; i < sz; i++)
+            fscanf(epd_file, "%f", &((float*)buffers_h[n])[i]);
+        cudaMemcpy(buffers[n], buffers_h[n], 
+            CAL_BATCH_SIZE * sizeof(float) * sz, cudaMemcpyHostToDevice);
+        bindings[n] = buffers[n];
     }
 
     counter++;
@@ -382,8 +270,7 @@ public:
 
 private:
   std::vector<void*> buffers;
-  float* main_input;
-  float* aux_input;
+  std::vector<void*> buffers_h;
   int counter;
   FILE* epd_file;
   static const int CAL_BATCH_SIZE = 256;
@@ -391,7 +278,7 @@ private:
   static const std::string calib_file_name;
 };
 
-const std::string Int8CacheCalibrator::calib_file_name = "calibrate.epd";
+const std::string Int8CacheCalibrator::calib_file_name = "calibrate.dat";
 
 class Logger : public ILogger {
     void log(Severity severity, const char* msg) override {
@@ -408,17 +295,19 @@ class TrtModel : public Model {
     nvinfer1::DataType floatMode;
     std::vector<void*> buffers;
     std::vector<float*> buffers_h;
-    int maini, auxi, policyi, valuei;
+    std::vector<int> buffer_sizes;
+    std::vector<int> inp_index;
+    std::vector<int> out_index;
 public:
     TrtModel();
     ~TrtModel();
     void LoadGraph(const string& uff_file_name, int dev_id, int dev_type);
     void predict();
-    float* get_main_input() {
-        return buffers_h[maini];
+    float* get_input_buffer(int idx) {
+        return buffers_h[inp_index[idx]];
     }
-    float* get_aux_input() {
-        return buffers_h[auxi];
+    int get_input_size(int idx) {
+        return buffer_sizes[inp_index[idx]];
     }
 };
 
@@ -458,13 +347,16 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
 
         IUffParser* parser;
         parser = createUffParser();
-        parser->registerInput(main_input_layer.c_str(), 
-            nvinfer1::DimsCHW(CHANNELS, 8, 8), UffInputOrder::kNCHW);
-        if(nn_type == DEFAULT)
-            parser->registerInput(aux_input_layer.c_str(), 
-                nvinfer1::DimsCHW(NPARAMS, 1, 1), UffInputOrder::kNC);
-        parser->registerOutput(value_layer.c_str());
-        parser->registerOutput(policy_layer.c_str());
+
+        for(int n = 0; n < input_layer_names.size(); n++)
+            parser->registerInput(input_layer_names[n].c_str(), 
+                nvinfer1::DimsCHW(std::get<0>(input_layer_shapes[n]),
+                                  std::get<1>(input_layer_shapes[n]),
+                                  std::get<2>(input_layer_shapes[n])), 
+                                  UffInputOrder::kNCHW);
+
+        for(int n = 0; n < output_layer_names.size(); n++)
+            parser->registerOutput(output_layer_names[n].c_str());
 
         IBuilder* builder = createInferBuilder(logger);
         if ((floatMode == nvinfer1::DataType::kINT8 && !builder->platformHasFastInt8()) 
@@ -530,37 +422,43 @@ void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) 
     numBindings = engine->getNbBindings();
     
     /*Pinned memory*/
-    float* pDevice, *pHost;
-    cudaHostAlloc((void**)&pHost, 
-        BATCH_SIZE * (8 * 8 * CHANNELS + NPARAMS + 3 + NPOLICY) * sizeof(float), 
-        cudaHostAllocMapped);
-    cudaHostGetDevicePointer((void**)&pDevice,(void*)pHost,0);
-
+    size_t TOTAL = 0;
     for(int i = 0; i < numBindings; i++) {
 
         Dims d = engine->getBindingDimensions(i);
         size_t size = 1;
         for(size_t j = 0; j < d.nbDims; j++) 
             size*= d.d[j];
+        TOTAL += size;
+        buffer_sizes.push_back(size);
 
-#if 0
+#if 1
         printf("%d. %s %d =",i,engine->getBindingName(i),size);
         for(size_t j = 0; j < d.nbDims; j++) 
             printf(" %d",d.d[j]);
         printf("\n");
         fflush(stdout);
 #endif
+    }
 
+    float* pDevice, *pHost;
+    cudaHostAlloc((void**)&pHost, 
+        BATCH_SIZE * TOTAL * sizeof(float), 
+        cudaHostAllocMapped);
+    cudaHostGetDevicePointer((void**)&pDevice,(void*)pHost,0);
+
+    for(int i = 0; i < numBindings; i++) {
+        size_t size = buffer_sizes[i];
         buffers.push_back(pDevice);
         buffers_h.push_back(pHost);
         pDevice += BATCH_SIZE * size;
         pHost += BATCH_SIZE * size;
     }
 
-    maini = engine->getBindingIndex(main_input_layer.c_str());
-    auxi = engine->getBindingIndex(aux_input_layer.c_str());
-    policyi = engine->getBindingIndex(policy_layer.c_str());
-    valuei = engine->getBindingIndex(value_layer.c_str());
+    for(int n = 0; n < input_layer_names.size(); n++)
+        inp_index.push_back( engine->getBindingIndex(input_layer_names[n].c_str()) );
+    for(int n = 0; n < output_layer_names.size(); n++)
+        out_index.push_back( engine->getBindingIndex(output_layer_names[n].c_str()) );
 }
 void TrtModel::predict() {
 
@@ -568,27 +466,16 @@ void TrtModel::predict() {
 
     context->execute(BATCH_SIZE, buffers.data());
 
-    if(nn_type == DEFAULT || nn_type == SIMPLE) {
-        for(int i = 0;i < n_batch;i++) {
-            float p = buffers_h[valuei][3*i+0] * 1.0 + buffers_h[valuei][3*i+1] * 0.5;
-            scores[i] = logit(p);
+    for(int i = 0;i < n_batch;i++) {
 
-            for(int j = 0;j < policy_size[i];j++) {
-                int idx = policy_index[i * MAX_MOVES + j];
-                float p = buffers_h[policyi][i * NPOLICY + idx];
-                policy_scores[i * MAX_MOVES + j] = p;
-            }
+        for(int j = 0;j < NVALUE;j++) {
+            scores[i * NVALUE + j] = buffers_h[out_index[0]][i * NVALUE + j];
         }
-    } else {
-        for(int i = 0;i < n_batch;i++) {
-            float p = (buffers_h[valuei][i] + 1.0) * 0.5;
-            scores[i] = logit(p);
 
-            for(int j = 0;j < policy_size[i];j++) {
-                int idx = policy_index[i * MAX_MOVES + j];
-                float p = buffers_h[policyi][i * NPOLICY + idx];
-                policy_scores[i * MAX_MOVES + j] = p;
-            }
+        for(int j = 0;j < policy_size[i];j++) {
+            int idx = policy_index[i * MAX_MOVES + j];
+            float p = buffers_h[out_index[1]][i * NPOLICY + idx];
+            policy_scores[i * MAX_MOVES + j] = p;
         }
     }
 }
@@ -600,8 +487,8 @@ void TrtModel::predict() {
 */
 typedef struct tagNNHASH {
     UBMP64 hash_key;
-    BMP32 value;
-    float policy[MAX_MOVES-3];
+    float value[3];
+    float policy[MAX_MOVES-5];
     UBMP16 index[MAX_MOVES];
 } NNHASH, *PNNHASH;
 
@@ -619,7 +506,7 @@ static void allocate_nn_cache(UBMP32 sizeb) {
     fflush(stdout);
 }
 
-static void store_nn_cache(const UBMP64 hash_key, const int value, 
+static void store_nn_cache(const UBMP64 hash_key, const float* value, 
     const float* policy, const UBMP16* index, const int count
     ) {
     UBMP32 key = UBMP32(hash_key & nn_cache_mask);
@@ -627,20 +514,21 @@ static void store_nn_cache(const UBMP64 hash_key, const int value,
     
     if(nn_hash->hash_key != hash_key) {
         nn_hash->hash_key = hash_key;
-        nn_hash->value = value;
+        memcpy(nn_hash->value, value, NVALUE * sizeof(float));
         memcpy(nn_hash->policy, policy, count * sizeof(float));
         memcpy(nn_hash->index, index, count * sizeof(BMP16));
     }
 }
 
-static bool retrieve_nn_cache(const UBMP64 hash_key, int& value, 
+static bool retrieve_nn_cache(const UBMP64 hash_key, float* value, 
     float* policy, const UBMP16* index, const int count
     ) {
     UBMP32 key = UBMP32(hash_key & nn_cache_mask);
     PNNHASH nn_hash = nn_cache + key; 
 
     if(nn_hash->hash_key == hash_key) {
-        value = nn_hash->value;
+        for(int i = 0; i < NVALUE; i++)
+            value[i] = nn_hash->value[i];
         for(int i = 0; i < count; i++) {
             if(index[i] == nn_hash->index[i]) {
                 policy[i] = nn_hash->policy[i];
@@ -671,12 +559,22 @@ static void CDECL nn_thread_proc(void* id) {
 /*
    Initialize tensorflow
 */
-static int add_to_batch(
-    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, int batch_id);
+static int add_to_batch(int batch_id, float** iplanes);
+
+int tokenize(char *str, char** tokens, const char *str2 = " ") {
+    int nu_tokens = 0;
+    tokens[nu_tokens] = strtok(str, str2);
+    while (tokens[nu_tokens++] != NULL) {
+        tokens[nu_tokens] = strtok(NULL, str2);
+    }
+    return nu_tokens;
+}
 
 DLLExport void CDECL load_neural_network(
     char* path, int nn_cache_size, int n_threads, int n_devices, 
-    int dev_type, int delay, int float_type, int lnn_type
+    int dev_type, int delay, int float_type, 
+    char* input_names, char* output_names,
+    char* input_shapes, char* output_shapes
     ) {
 
     /*Allocate cache*/
@@ -695,7 +593,6 @@ DLLExport void CDECL load_neural_network(
     setenv("TF_CPP_MIN_LOG_LEVEL","3",1);
 #endif
 
-    nn_type = lnn_type;
     delayms = delay;
     n_searchers = n_threads;
     N_DEVICES = n_devices;
@@ -703,32 +600,45 @@ DLLExport void CDECL load_neural_network(
     BATCH_SIZE = n_searchers / N_DEVICES;
     floatPrecision = float_type;
 
-    init_index_table();
+    /*parse input and output node names and shapes*/
+    int num_tokens;
+    char* commands[MAX_STR];
 
-    /*constants based on network type*/
-    if(nn_type == DEFAULT || nn_type == SIMPLE) {
-        if(nn_type == DEFAULT)
-            CHANNELS = 24;
-        else
-            CHANNELS = 12;
-        value_layer = "value/Softmax";
-#if AZPOLICY
-        policy_layer = "policy/Reshape";
-        NPOLICY = 4672;
-#else
-        policy_layer = "policy/BiasAdd";
-        NPOLICY = 1858;
-#endif
-    } else {
-        CHANNELS = 112;
-        NPOLICY = 1858;
-        value_layer = "value_head";
-        policy_layer = "policy_head";
+    num_tokens = tokenize(input_names,commands) - 1;
+    for(int i = 0; i < num_tokens; i++)
+        input_layer_names.push_back(commands[i]);
+
+    tokenize(input_shapes,commands);
+    for(int i = 0; i < num_tokens; i++) {
+        std::tuple<int,int,int> tp(
+            atoi(commands[3*i+0]),
+            atoi(commands[3*i+1]),
+            atoi(commands[3*i+2]) );
+        input_layer_shapes.push_back(tp);
     }
-    
+
+    num_tokens = tokenize(output_names,commands) - 1;
+    for(int i = 0; i < num_tokens; i++)
+        output_layer_names.push_back(commands[i]);
+
+    tokenize(output_shapes,commands);
+    for(int i = 0; i < num_tokens; i++) {
+        std::tuple<int,int,int> tp(
+            atoi(commands[3*i+0]),
+            atoi(commands[3*i+1]),
+            atoi(commands[3*i+2]) );
+        output_layer_shapes.push_back(tp);
+
+        int sz = std::get<0>(tp) *
+                 std::get<1>(tp) *
+                 std::get<2>(tp);
+        if(i == 0) NVALUE = sz;
+        else NPOLICY = sz;
+    }
+
+
     /*Load tensorflow or tensorrt graphs on GPU*/
     netModel = new Model*[N_DEVICES];
-    is_trt = false;
 #if defined(TENSORFLOW) && defined(TRT)
     if(strstr(path, ".pb") != NULL) {
         for(int i = 0; i < N_DEVICES; i++)
@@ -736,7 +646,6 @@ DLLExport void CDECL load_neural_network(
     } else if(strstr(path, ".uff") != NULL) {
         for(int i = 0; i < N_DEVICES; i++)
             netModel[i] = new TrtModel;
-        is_trt = true;
     }
 #elif defined(TENSORFLOW)
     for(int i = 0; i < N_DEVICES; i++)
@@ -744,7 +653,6 @@ DLLExport void CDECL load_neural_network(
 #elif defined(TRT)
     for(int i = 0; i < N_DEVICES; i++)
         netModel[i] = new TrtModel;
-    is_trt = true;
 #endif
 
     /*Load NN with multiple threads*/
@@ -764,7 +672,7 @@ DLLExport void CDECL load_neural_network(
         int piece = _EMPTY, square = _EMPTY;
         Model* net = netModel[dev_id];
         for(int i = 0;i < BATCH_SIZE;i++)
-            add_to_batch(0, 0, 1, 1, 0, &piece, &square, dev_id);
+            add_to_batch(dev_id, 0);
         net->predict();
         net->n_batch = 0;
     }
@@ -778,23 +686,20 @@ DLLExport void CDECL load_neural_network(
    Add position to batch
 */
 
-static int add_to_batch(
-    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, int batch_id) {
+static int add_to_batch(int batch_id, float** iplanes) {
 
     //get identifier
     Model* net = netModel[batch_id];
 
-    //input
-    float* minput = net->get_main_input();
-    float* ainput = net->get_aux_input();
-
     //offsets
     int offset = l_add(net->n_batch,1);
-    minput += offset * (8 * 8 * CHANNELS);
-    ainput += offset * (NPARAMS);
-
-    //fill planes
-    fill_input_planes(player, cast, fifty, hist, draw, piece, square, minput, ainput);
+    for(int n = 0; n < input_layer_names.size(); n++) {
+        float* pinput = net->get_input_buffer(n);
+        int sz = net->get_input_size(n);
+        pinput += offset * sz;
+        if(iplanes)
+            memcpy(pinput, iplanes[n], sizeof(float) * sz);
+    }
 
     return offset;
 }
@@ -808,63 +713,14 @@ static int add_to_batch(
     t_sleep(delayms); \
 }
 
-DLLExport int CDECL probe_neural_network(
-    int player, int cast, int fifty, int hist, int* draw, int* piece, int* square, 
-    int* moves, float* probs, int nmoves, UBMP64 hash_key, bool hard_probe
-    ) {
-
-    //policy
-    unsigned short pindex[MAX_MOVES];
-
-    if(moves) {
-        int* s = moves, cnt = 0;
-        while(*s >= 0) {
-            int index, from, to, prom;
-            from = *s++;
-            to = *s++;
-            prom = *s++;
-            if(player == _BLACK) {
-                from = MIRRORR64(from);
-                to = MIRRORR64(to);
-            }
-
-#if AZPOLICY
-            if(nn_type == DEFAULT || nn_type == SIMPLE) {
-                index = from * 73;
-                if(prom) {
-                    prom = PIECE(prom);
-                    if(prom != queen)
-                        index += 64 + (to - from - 7) * 3  + (prom - queen);
-                    else
-                        index += move_map[SQ6488(to) - SQ6488(from)];
-                } else {
-                    index += move_map[SQ6488(to) - SQ6488(from)];
-                }
-            } else 
-#endif
-            {
-                int compi = from * 64 + to;
-                if(prom) {
-                    prom = PIECE(prom);
-                    if(prom != knight) {
-                        compi = 4096 +  file64(from) * 9 + 
-                                (to - from - 7) * 3 + (prom - queen);
-                    }
-                }
-
-                index = move_index_table[compi];
-            }
-
-            pindex[cnt] = index;
-            cnt++;
-        }
-    }
+DLLExport void  CDECL probe_neural_network(
+    float** iplanes,  unsigned short* pindex, float* probs, float* scores, 
+    int nmoves, UBMP64 hash_key, bool hard_probe) {
 
     //retrieve from cache
     if(!hard_probe) {
-        int value;
-        if(retrieve_nn_cache(hash_key,value,probs,pindex,nmoves))
-            return value;
+        if(retrieve_nn_cache(hash_key,scores,probs,pindex,nmoves))
+            return;
     }
 
     //choose batch id
@@ -890,13 +746,11 @@ DLLExport int CDECL probe_neural_network(
     Model* net = netModel[batch_id];
 
     //add to batch
-    int offset = add_to_batch(player,cast,fifty,hist,draw,piece,square,batch_id);
+    int offset = add_to_batch(batch_id, iplanes);
 
     //policy
-    if(moves) {
-        memcpy(net->policy_index + offset * MAX_MOVES, pindex, nmoves * sizeof(short));
-        net->policy_size[offset] = nmoves;
-    }
+    memcpy(net->policy_index + offset * MAX_MOVES, pindex, nmoves * sizeof(short));
+    net->policy_size[offset] = nmoves;
 
     //pause threads till eval completes
     if(offset + 1 < BATCH_SIZE) {
@@ -925,13 +779,12 @@ DLLExport int CDECL probe_neural_network(
         net->wait = 0;
     }
 
-    //policy
-    if(moves)
-        memcpy(probs, net->policy_scores + offset * MAX_MOVES, nmoves * sizeof(float));
+    //copy
+    memcpy(probs, net->policy_scores + offset * MAX_MOVES, nmoves * sizeof(float));
+    memcpy(scores, net->scores + offset * NVALUE, NVALUE * sizeof(float));
 
     //store in cache
-    int value = net->scores[offset];
-    store_nn_cache(hash_key,value,probs,pindex,nmoves);
+    store_nn_cache(hash_key,scores,probs,pindex,nmoves);
 
     //Wait until all eval calls are finished
     l_lock(searcher_lock);
@@ -949,8 +802,6 @@ DLLExport int CDECL probe_neural_network(
         ) {
         SLEEP();
     }
-
-    return value;
 }
 
 #undef SLEEP
@@ -960,248 +811,4 @@ DLLExport int CDECL probe_neural_network(
 */
 DLLExport void CDECL set_num_active_searchers(int n_searchers) {
     l_set(n_active_searchers,n_searchers);
-}
-
-/*
-   Fill input planes
-*/
-static void fill_input_planes(
-    int player, int cast, int fifty, int hist, int* draw, 
-    int* piece, int* square, float* data, float* adata
-    ) {
-    
-    int pc, col, sq, to;
-
-    /* 
-       Add the attack map planes 
-    */
-#define DHWC(sq,C)     data[rank(sq) * 8 * CHANNELS + file(sq) * CHANNELS + C]
-#define DCHW(sq,C)     data[C * 8 * 8 + rank(sq) * 8 + file(sq)]
-#define D(sq,C)        ( (is_trt || (nn_type > DEFAULT) ) ? DCHW(sq,C) : DHWC(sq,C) )
-
-#define NK_MOVES(dir, off) {                    \
-        to = sq + dir;                          \
-        if(!(to & 0x88)) D(to, off) = 1.0f;     \
-}
-
-#define BRQ_MOVES(dir, off) {                   \
-        to = sq + dir;                          \
-        while(!(to & 0x88)) {                   \
-            D(to, off) = 1.0f;                  \
-            if(board[to] != 0) break;           \
-                to += dir;                      \
-        }                                       \
-}
-
-    memset(data,  0, sizeof(float) * 8 * 8 * CHANNELS);
-
-    if(nn_type == DEFAULT) {
-
-        int board[128];
-        int ksq = SQ6488(square[player]);
-
-        memset(board, 0, sizeof(int) * 128);
-        memset(adata, 0, sizeof(float) * NPARAMS);
-
-        for(int i = 0; (pc = piece[i]) != _EMPTY; i++) {
-            sq = SQ6488(square[i]);
-            if(player == _BLACK) {
-                sq = MIRRORR(sq);
-                pc = invert_color(pc);
-            }
-
-            board[sq] = pc;
-        }
-
-        for(int i = 0; (pc = piece[i]) != _EMPTY; i++) {
-            sq = SQ6488(square[i]);
-            if(player == _BLACK) {
-                sq = MIRRORR(sq);
-                pc = invert_color(pc);
-            }
-            D(sq,(pc+11)) = 1.0f;
-            switch(pc) {
-                case wking:
-                    NK_MOVES(RU,0);
-                    NK_MOVES(LD,0);
-                    NK_MOVES(LU,0);
-                    NK_MOVES(RD,0);
-                    NK_MOVES(UU,0);
-                    NK_MOVES(DD,0);
-                    NK_MOVES(RR,0);
-                    NK_MOVES(LL,0);
-                    break;
-                case wqueen:
-                    BRQ_MOVES(RU,1);
-                    BRQ_MOVES(LD,1);
-                    BRQ_MOVES(LU,1);
-                    BRQ_MOVES(RD,1);
-                    BRQ_MOVES(UU,1);
-                    BRQ_MOVES(DD,1);
-                    BRQ_MOVES(RR,1);
-                    BRQ_MOVES(LL,1);
-                    break;
-                case wrook:
-                    BRQ_MOVES(UU,2);
-                    BRQ_MOVES(DD,2);
-                    BRQ_MOVES(RR,2);
-                    BRQ_MOVES(LL,2);
-                    break;
-                case wbishop:
-                    BRQ_MOVES(RU,3);
-                    BRQ_MOVES(LD,3);
-                    BRQ_MOVES(LU,3);
-                    BRQ_MOVES(RD,3);
-                    break;
-                case wknight:
-                    NK_MOVES(RRU,4);
-                    NK_MOVES(LLD,4);
-                    NK_MOVES(RUU,4);
-                    NK_MOVES(LDD,4);
-                    NK_MOVES(LLU,4);
-                    NK_MOVES(RRD,4);
-                    NK_MOVES(RDD,4);
-                    NK_MOVES(LUU,4);
-                    break;
-                case wpawn:
-                    NK_MOVES(RU,5);
-                    NK_MOVES(LU,5);
-                    break;
-                case bking:
-                    NK_MOVES(RU,6);
-                    NK_MOVES(LD,6);
-                    NK_MOVES(LU,6);
-                    NK_MOVES(RD,6);
-                    NK_MOVES(UU,6);
-                    NK_MOVES(DD,6);
-                    NK_MOVES(RR,6);
-                    NK_MOVES(LL,6);
-                    break;
-                case bqueen:
-                    BRQ_MOVES(RU,7);
-                    BRQ_MOVES(LD,7);
-                    BRQ_MOVES(LU,7);
-                    BRQ_MOVES(RD,7);
-                    BRQ_MOVES(UU,7);
-                    BRQ_MOVES(DD,7);
-                    BRQ_MOVES(RR,7);
-                    BRQ_MOVES(LL,7);
-                    break;
-                case brook:
-                    BRQ_MOVES(UU,8);
-                    BRQ_MOVES(DD,8);
-                    BRQ_MOVES(RR,8);
-                    BRQ_MOVES(LL,8);
-                    break;
-                case bbishop:
-                    BRQ_MOVES(RU,9);
-                    BRQ_MOVES(LD,9);
-                    BRQ_MOVES(LU,9);
-                    BRQ_MOVES(RD,9);
-                    break;
-                case bknight:
-                    NK_MOVES(RRU,10);
-                    NK_MOVES(LLD,10);
-                    NK_MOVES(RUU,10);
-                    NK_MOVES(LDD,10);
-                    NK_MOVES(LLU,10);
-                    NK_MOVES(RRD,10);
-                    NK_MOVES(RDD,10);
-                    NK_MOVES(LUU,10);
-                    break;
-                case bpawn:
-                    NK_MOVES(RD,11);
-                    NK_MOVES(LD,11);
-                    break;
-            }
-
-            col = COLOR(pc);
-            pc = PIECE(pc);
-
-            if(pc != king) {
-                if(col == white)
-                    adata[pc - queen]++;
-                else
-                    adata[pc - queen]--;
-            }
-        }
-    } else if (nn_type == SIMPLE) {
-        for(int i = 0; (pc = piece[i]) != _EMPTY; i++) {
-            sq = SQ6488(square[i]);
-            if(player == _BLACK) {
-                sq = MIRRORR(sq);
-                pc = invert_color(pc);
-            }
-            D(sq,(pc-1)) = 1.0f;
-        }
-    } else {
-
-        static const int piece_map[2][12] = {
-            {
-                wpawn,wknight,wbishop,wrook,wqueen,wking,
-                bpawn,bknight,bbishop,brook,bqueen,bking
-            },
-            {
-                bpawn,bknight,bbishop,brook,bqueen,bking,
-                wpawn,wknight,wbishop,wrook,wqueen,wking
-            }
-        };
-
-        for(int h = 0, i = 0; h < hist; h++) {
-            for(; (pc = piece[i]) != _EMPTY; i++) {
-                sq = SQ6488(square[i]);
-                if(player == _BLACK) 
-                    sq = MIRRORR(sq);
-                int off = piece_map[player][pc - wking]
-                         - wking + 13 * h;
-                D(sq,off) = 1.0f;
-            }
-            if(draw && draw[h]) {
-                int off = 13 * h + 12;
-                for(int i = 0; i < 64; i++) {
-                    sq = SQ6488(i);
-                    D(sq,off) = 1.0;
-                }
-            }
-            i++;
-        }
-
-        for(int i = 0; i < 64; i++) {
-            sq = SQ6488(i);
-            if(player == _BLACK) {
-                if(cast & 8) D(sq,(CHANNELS - 8)) = 1.0;
-                if(cast & 4) D(sq,(CHANNELS - 7)) = 1.0;
-                if(cast & 2) D(sq,(CHANNELS - 6)) = 1.0;
-                if(cast & 1) D(sq,(CHANNELS - 5)) = 1.0;
-                D(sq,(CHANNELS - 4)) = 1.0;
-            } else {
-                if(cast & 2) D(sq,(CHANNELS - 8)) = 1.0;
-                if(cast & 1) D(sq,(CHANNELS - 7)) = 1.0;
-                if(cast & 8) D(sq,(CHANNELS - 6)) = 1.0;
-                if(cast & 4) D(sq,(CHANNELS - 5)) = 1.0;
-                D(sq,(CHANNELS - 4)) = 0.0;
-            }
-            D(sq,(CHANNELS - 3)) = fifty / 100.0;
-            D(sq,(CHANNELS - 1)) = 1.0;
-        }
-    }
-
-#if 0
-        for(int c = 0; c < CHANNELS;c++) {
-            printf("Channel %d\n",c);
-            for(int i = 0; i < 8; i++) {
-                for(int j = 0; j < 8; j++) {
-                    int sq = SQ(i,j);
-                    printf("%d ",int(D(sq,c)));
-                }
-                printf("\n");
-            }
-            printf("\n");
-        }
-        fflush(stdout);
-#endif
-
-#undef NK_MOVES
-#undef BRQ_MOVES
-#undef D
 }
