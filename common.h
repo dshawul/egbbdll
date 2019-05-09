@@ -12,7 +12,6 @@
 #include <cstring>
 #include <unordered_map>
 
-#define PARALLEL
 #include "my_types.h"
 #include "cache.h"
 #include "codec.h"

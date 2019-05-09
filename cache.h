@@ -1,7 +1,6 @@
 #ifndef __CACHE__
 #define __CACHE__
 
-#define PARALLEL
 #include "my_types.h"
 #include <unordered_map>
 

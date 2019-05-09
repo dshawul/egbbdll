@@ -39,7 +39,8 @@ DLLExport void CDECL load_neural_network(char* path, int nn_cache_size = 4194304
                                         int n_devices = 1, int dev_type = CPU, 
                                         int delay = 0, int float_type = 1, 
                                         char* input_names = 0, char* output_names = 0,
-                                        char* input_shapes = 0, char* output_shapes = 0);
+                                        char* input_shapes = 0, char* output_shapes = 0,
+                                        int max_moves = 256);
 /*private*/
 DLLExport void CDECL load_egbb_into_ram(int side,int* piece);
 DLLExport void CDECL unload_egbb_from_ram(int side,int* piece);

@@ -17,11 +17,11 @@
 #include "include/NvUffParser.h"
 #endif
 
-#include "common.h"
+#include "my_types.h"
 #include "egbbdll.h"
 
-static std::vector<string> input_layer_names;
-static std::vector<string> output_layer_names;
+static std::vector<std::string> input_layer_names;
+static std::vector<std::string> output_layer_names;
 static std::vector<std::tuple<int,int,int>> input_layer_shapes;
 static std::vector<std::tuple<int,int,int>> output_layer_shapes;
 
@@ -34,6 +34,9 @@ static int delayms = 0;
 static int NVALUE = 3;
 static int NPOLICY = 4672;
 static int floatPrecision = 1;
+static int MAX_MOVES_NN = 256;
+
+static LOCK global_lock;
 
 /*
   Network model
@@ -51,8 +54,8 @@ public:
     int id;
     Model() {
         scores = new float[BATCH_SIZE * NVALUE];
-        policy_scores = new float[BATCH_SIZE * MAX_MOVES];
-        policy_index = new unsigned short[BATCH_SIZE * MAX_MOVES];
+        policy_scores = new float[BATCH_SIZE * MAX_MOVES_NN];
+        policy_index = new unsigned short[BATCH_SIZE * MAX_MOVES_NN];
         policy_size = new int[BATCH_SIZE];
         memset(policy_size,0,BATCH_SIZE * sizeof(int));
         n_batch = 0;
@@ -70,7 +73,7 @@ public:
     virtual float* get_input_buffer(int) = 0;
     virtual int get_input_size(int) = 0;
     virtual void predict() = 0;
-    virtual void LoadGraph(const string&, int, int) = 0;
+    virtual void LoadGraph(const std::string&, int, int) = 0;
     static char path[256];
     static int dev_type;
 };
@@ -92,7 +95,7 @@ class TfModel : public Model {
 public:
     TfModel();
     ~TfModel();
-    void LoadGraph(const string& graph_file_name, int dev_id, int dev_type);
+    void LoadGraph(const std::string& graph_file_name, int dev_id, int dev_type);
     void predict();
     float* get_input_buffer(int idx) {
         return (float*)(input_layers[idx]->tensor_data().data());
@@ -111,7 +114,7 @@ TfModel::~TfModel() {
     }
     delete[] input_layers;
 }
-void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type) {
+void TfModel::LoadGraph(const std::string& graph_file_name, int dev_id, int dev_type) {
     Model::id = dev_id;
 
     GraphDef graph_def;
@@ -161,11 +164,11 @@ void TfModel::LoadGraph(const string& graph_file_name, int dev_id, int dev_type)
 
 void TfModel::predict() {
     std::vector<Tensor> outputs;
-    std::vector<std::pair<string, Tensor> > inps;
-    std::vector<string> outs;
+    std::vector<std::pair<std::string, Tensor> > inps;
+    std::vector<std::string> outs;
 
     for(int n = 0; n < input_layer_names.size(); n++) {
-        std::pair<string, Tensor> pr( 
+        std::pair<std::string, Tensor> pr( 
             input_layer_names[n], *(input_layers[n]) );
         inps.push_back(pr);
     }
@@ -183,9 +186,9 @@ void TfModel::predict() {
         }
 
         for(int j = 0;j < policy_size[i];j++) {
-            int idx = policy_index[i * MAX_MOVES + j];
+            int idx = policy_index[i * MAX_MOVES_NN + j];
             float p = pp1(i,idx);
-            policy_scores[i * MAX_MOVES + j] = p;
+            policy_scores[i * MAX_MOVES_NN + j] = p;
         }
     }
 }
@@ -301,7 +304,7 @@ class TrtModel : public Model {
 public:
     TrtModel();
     ~TrtModel();
-    void LoadGraph(const string& uff_file_name, int dev_id, int dev_type);
+    void LoadGraph(const std::string& uff_file_name, int dev_id, int dev_type);
     void predict();
     float* get_input_buffer(int idx) {
         return buffers_h[inp_index[idx]];
@@ -329,7 +332,7 @@ TrtModel::~TrtModel() {
     cudaFreeHost(buffers_h[0]);
 }
 
-void TrtModel::LoadGraph(const string& uff_file_name, int dev_id, int dev_type) {
+void TrtModel::LoadGraph(const std::string& uff_file_name, int dev_id, int dev_type) {
     std::string dev_name = ((dev_type == GPU) ? "/gpu:" : "/cpu:") + std::to_string(dev_id);
     printf("Loading graph on %s\n",dev_name.c_str());
     fflush(stdout);
@@ -473,9 +476,9 @@ void TrtModel::predict() {
         }
 
         for(int j = 0;j < policy_size[i];j++) {
-            int idx = policy_index[i * MAX_MOVES + j];
+            int idx = policy_index[i * MAX_MOVES_NN + j];
             float p = buffers_h[out_index[1]][i * NPOLICY + idx];
-            policy_scores[i * MAX_MOVES + j] = p;
+            policy_scores[i * MAX_MOVES_NN + j] = p;
         }
     }
 }
@@ -485,24 +488,18 @@ void TrtModel::predict() {
 /* 
   Neural network caching
 */
-typedef struct tagNNHASH {
-    UBMP64 hash_key;
-    float value[3];
-    float policy[MAX_MOVES-5];
-    UBMP16 index[MAX_MOVES];
-} NNHASH, *PNNHASH;
-
-static PNNHASH nn_cache;
+static UBMP64* nn_cache;
 static UBMP32 nn_cache_mask;
 
 static void allocate_nn_cache(UBMP32 sizeb) {
-    UBMP32 size = 1, size_max = sizeb / sizeof(NNHASH);
+    UBMP32 szhash = (3 * MAX_MOVES_NN) * sizeof(short);
+    UBMP32 size = 1, size_max = sizeb / szhash;
     while(2 * size <= size_max) size *= 2;
     nn_cache_mask = size - 1;
-    aligned_reserve<NNHASH>(nn_cache,size);
+    aligned_reserve<UBMP64>(nn_cache,size * (szhash / sizeof(UBMP64)) );
 
-    printf("nn_cache %d X %d = %.1f MB\n",size,int(sizeof(NNHASH)),
-        (size * sizeof(NNHASH)) / double(1024 * 1024));
+    printf("nn_cache %d X %d = %.1f MB\n",size,int(szhash),
+        (size * szhash) / double(1024 * 1024));
     fflush(stdout);
 }
 
@@ -510,13 +507,13 @@ static void store_nn_cache(const UBMP64 hash_key, const float* value,
     const float* policy, const UBMP16* index, const int count
     ) {
     UBMP32 key = UBMP32(hash_key & nn_cache_mask);
-    PNNHASH nn_hash = nn_cache + key; 
+    UBMP64* const nn_hash = nn_cache + key * ((3 * MAX_MOVES_NN) / 4); 
     
-    if(nn_hash->hash_key != hash_key) {
-        nn_hash->hash_key = hash_key;
-        memcpy(nn_hash->value, value, NVALUE * sizeof(float));
-        memcpy(nn_hash->policy, policy, count * sizeof(float));
-        memcpy(nn_hash->index, index, count * sizeof(BMP16));
+    if(*nn_hash != hash_key) {
+        *nn_hash = hash_key;
+        memcpy(nn_hash + 1, value, NVALUE * sizeof(float));
+        memcpy(nn_hash + 3, policy, count * sizeof(float));
+        memcpy(nn_hash + MAX_MOVES_NN / 2, index, count * sizeof(UBMP16));
     }
 }
 
@@ -524,18 +521,23 @@ static bool retrieve_nn_cache(const UBMP64 hash_key, float* value,
     float* policy, const UBMP16* index, const int count
     ) {
     UBMP32 key = UBMP32(hash_key & nn_cache_mask);
-    PNNHASH nn_hash = nn_cache + key; 
+    UBMP64* const nn_hash = nn_cache + key * ((3 * MAX_MOVES_NN) / 4);
 
-    if(nn_hash->hash_key == hash_key) {
+    if(*nn_hash == hash_key) {
+
+        float* const nn_value = (float*)(nn_hash + 1);
+        float* const nn_policy = (float*)(nn_hash + 3);
+        UBMP16* const nn_index = (UBMP16*)(nn_hash + MAX_MOVES_NN / 2);
+
         for(int i = 0; i < NVALUE; i++)
-            value[i] = nn_hash->value[i];
+            value[i] = nn_value[i];
         for(int i = 0; i < count; i++) {
-            if(index[i] == nn_hash->index[i]) {
-                policy[i] = nn_hash->policy[i];
+            if(index[i] == nn_index[i]) {
+                policy[i] = nn_policy[i];
             } else {
                 for(int j = 0; j < count; j++) {
-                    if(index[i] == nn_hash->index[j]) {
-                        policy[i] = nn_hash->policy[j];
+                    if(index[i] == nn_index[j]) {
+                        policy[i] = nn_policy[j];
                         break;
                     }
                 }
@@ -574,9 +576,13 @@ DLLExport void CDECL load_neural_network(
     char* path, int nn_cache_size, int n_threads, int n_devices, 
     int dev_type, int delay, int float_type, 
     char* input_names, char* output_names,
-    char* input_shapes, char* output_shapes
+    char* input_shapes, char* output_shapes,
+    int max_moves
     ) {
 
+    l_create(global_lock);
+    MAX_MOVES_NN = max_moves;
+    
     /*Allocate cache*/
     allocate_nn_cache(nn_cache_size);
 
@@ -602,7 +608,7 @@ DLLExport void CDECL load_neural_network(
 
     /*parse input and output node names and shapes*/
     int num_tokens;
-    char* commands[MAX_STR];
+    char* commands[256];
 
     num_tokens = tokenize(input_names,commands) - 1;
     for(int i = 0; i < num_tokens; i++)
@@ -725,7 +731,7 @@ DLLExport void  CDECL probe_neural_network(
 
     //choose batch id
     int batch_id;
-    l_lock(searcher_lock);
+    l_lock(global_lock);
     do {
         for(batch_id = chosen_device;batch_id < N_DEVICES; batch_id++) {
             Model* net = netModel[batch_id];
@@ -740,7 +746,7 @@ DLLExport void  CDECL probe_neural_network(
     chosen_device = batch_id + 1;
     if(chosen_device == N_DEVICES)
         chosen_device = 0;
-    l_unlock(searcher_lock);
+    l_unlock(global_lock);
 
     //get identifier
     Model* net = netModel[batch_id];
@@ -749,7 +755,7 @@ DLLExport void  CDECL probe_neural_network(
     int offset = add_to_batch(batch_id, iplanes);
 
     //policy
-    memcpy(net->policy_index + offset * MAX_MOVES, pindex, nmoves * sizeof(short));
+    memcpy(net->policy_index + offset * MAX_MOVES_NN, pindex, nmoves * sizeof(short));
     net->policy_size[offset] = nmoves;
 
     //pause threads till eval completes
@@ -780,14 +786,14 @@ DLLExport void  CDECL probe_neural_network(
     }
 
     //copy
-    memcpy(probs, net->policy_scores + offset * MAX_MOVES, nmoves * sizeof(float));
+    memcpy(probs, net->policy_scores + offset * MAX_MOVES_NN, nmoves * sizeof(float));
     memcpy(scores, net->scores + offset * NVALUE, NVALUE * sizeof(float));
 
     //store in cache
     store_nn_cache(hash_key,scores,probs,pindex,nmoves);
 
     //Wait until all eval calls are finished
-    l_lock(searcher_lock);
+    l_lock(global_lock);
     net->n_finished_threads++;
     if(net->n_finished_threads == net->n_batch) {
         net->wait = 1;
@@ -795,7 +801,7 @@ DLLExport void  CDECL probe_neural_network(
         net->n_batch = 0;
         net->n_batch_i = 0;
     } 
-    l_unlock(searcher_lock);
+    l_unlock(global_lock);
 
     while (net->n_finished_threads > 0 
         && net->n_finished_threads < net->n_batch
