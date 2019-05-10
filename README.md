@@ -32,9 +32,9 @@ complete in these libraries.
 The easiest way on a Windows machines is to download the binaries I provide for both 
 CPU and GPU (with CUDA + cuDNN libraries). Here are the links for convenience
 
-[egbbdll64-nn-windows-cpu.zip](https://github.com/dshawul/Scorpio/releases/download/2.8.9/egbbdll64-nn-windows-cpu.zip)
+[egbbdll64-nn-windows-cpu.zip](https://github.com/dshawul/Scorpio/releases/download/2.9.0/egbbdll64-nn-windows-cpu.zip)
 
-[egbbdll64-nn-windows-gpu.zip](https://github.com/dshawul/Scorpio/releases/download/2.8.9/egbbdll64-nn-windows-gpu.zip)
+[egbbdll64-nn-windows-gpu.zip](https://github.com/dshawul/Scorpio/releases/download/2.9.0/egbbdll64-nn-windows-gpu.zip)
 
 Extract it in a directory where bitbases are located so it can serve its dual purpose. 
 For the GPU version of egbbdll, we need to set the Path environment variable ( in the case of linux 

@@ -21,5 +21,11 @@ tf_cc_shared_object(
         "//tensorflow/cc:client_session",
         "//tensorflow/core:tensorflow"
     ],
-    defines = [ "TENSORFLOW" ]
+    defines = [ "TENSORFLOW",
+                "PARALLEL",
+                "USE_SPINLOCK",
+                "ARC_64BIT",
+                "HAS_POPCNT",
+                "HAS_PREFETCH"
+    ]
 )

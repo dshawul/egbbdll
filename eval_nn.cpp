@@ -12,6 +12,8 @@
 #include <fstream>
 #include <string>
 #include <iterator>
+#include <tuple>
+#include <cstring>
 #include "include/cuda_runtime_api.h"
 #include "include/NvInfer.h"
 #include "include/NvUffParser.h"
@@ -23,7 +25,7 @@
 static std::vector<std::string> input_layer_names;
 static std::vector<std::string> output_layer_names;
 static std::vector<std::tuple<int,int,int>> input_layer_shapes;
-static std::vector<std::tuple<int,int,int>> output_layer_shapes;
+static std::vector<int> output_layer_sizes;
 
 static int N_DEVICES;
 static int BATCH_SIZE;
@@ -31,10 +33,7 @@ static int n_searchers;
 static VOLATILE int n_active_searchers;
 static VOLATILE int chosen_device = 0;
 static int delayms = 0;
-static int NVALUE = 3;
-static int NPOLICY = 4672;
 static int floatPrecision = 1;
-static int MAX_MOVES_NN = 256;
 
 static LOCK global_lock;
 
@@ -43,21 +42,24 @@ static LOCK global_lock;
 */
 class Model {
 public:
-    float* scores;
-    float* policy_scores;
-    unsigned short* policy_index;
-    int* policy_size;
+    float*** p_outputs;
+    unsigned short*** p_index;
+    int** p_size;
     VOLATILE int wait;
     VOLATILE int n_batch;
     VOLATILE int n_batch_i;
     VOLATILE int n_finished_threads;
     int id;
     Model() {
-        scores = new float[BATCH_SIZE * NVALUE];
-        policy_scores = new float[BATCH_SIZE * MAX_MOVES_NN];
-        policy_index = new unsigned short[BATCH_SIZE * MAX_MOVES_NN];
-        policy_size = new int[BATCH_SIZE];
-        memset(policy_size,0,BATCH_SIZE * sizeof(int));
+        const int NOUT = output_layer_names.size();
+        p_outputs = new float**[NOUT];
+        p_index = new unsigned short**[NOUT];
+        p_size = new int*[NOUT];
+        for(int i = 0; i < NOUT; i++) {
+            p_outputs[i] = new float*[BATCH_SIZE];
+            p_index[i] = new unsigned short*[BATCH_SIZE];
+            p_size[i] = new int[BATCH_SIZE];
+        }
         n_batch = 0;
         n_batch_i = 0;
         n_finished_threads = 0;
@@ -65,10 +67,6 @@ public:
         wait = 1;
     }
     ~Model() {
-        delete[] scores;
-        delete[] policy_scores;
-        delete[] policy_index;
-        delete[] policy_size;
     }
     virtual float* get_input_buffer(int) = 0;
     virtual int get_input_size(int) = 0;
@@ -131,23 +129,23 @@ void TfModel::LoadGraph(const std::string& graph_file_name, int dev_id, int dev_
             if(node.name() == input_layer_names[n]) {
                 TensorShape nshape({BATCH_SIZE});
                 auto shape = node.attr().at("shape").shape();
-                printf("Input %d: %s (-1", n, node.name().c_str());
+                printf("%d. %s = ", n, node.name().c_str());
                 for (int i = 1; i < shape.dim_size(); i++) {
-                    printf(",%d",(int)shape.dim(i).size());
+                    printf("%d ",(int)shape.dim(i).size());
                     nshape.AddDim(shape.dim(i).size());
                 }
-                printf(")\n");
+                printf("\n");
                 input_layers[n] = new Tensor(DT_FLOAT, nshape);
             }
-            fflush(stdout);
         }
         for(int n = 0; n < output_layer_names.size(); n++) {
             if(node.name() == output_layer_names[n]) {
-                printf("Output %d: %s\n", n, node.name().c_str());
-                fflush(stdout);
+                printf("%d. %s", n, node.name().c_str());
+                printf("\n");
             }
         }
     }
+    fflush(stdout);
     
 
 #if 0
@@ -177,20 +175,25 @@ void TfModel::predict() {
 
     TF_CHECK_OK( session->Run(inps, outs, {}, &outputs) );
 
-    auto pp0 = outputs[0].matrix<float>();
-    auto pp1 = outputs[1].matrix<float>();
-    for(int i = 0;i < n_batch; i++) {
+    for(int k = 0; k < output_layer_names.size(); k++) {
+        auto pp = outputs[k].matrix<float>();
 
-        for(int j = 0;j < NVALUE;j++) {
-            scores[i * NVALUE + j] = pp0(i,j);
-        }
-
-        for(int j = 0;j < policy_size[i];j++) {
-            int idx = policy_index[i * MAX_MOVES_NN + j];
-            float p = pp1(i,idx);
-            policy_scores[i * MAX_MOVES_NN + j] = p;
+        if(p_index[k][0] == 0) {
+            for(int i = 0;i < n_batch; i++) {
+                for(int j = 0;j < p_size[k][i];j++) {
+                    p_outputs[k][i][j] = pp(i,j);
+                }
+            }
+        } else {
+            for(int i = 0;i < n_batch; i++) {
+                for(int j = 0;j < p_size[k][i];j++) {
+                    int idx = p_index[k][i][j];
+                    p_outputs[k][i][j] = pp(i,idx);
+                }
+            }
         }
     }
+
 }
 #endif
 
@@ -221,7 +224,7 @@ public:
     counter = 0;
 
     if (floatPrecision == 2) {
-        epd_file = fopen(calib_file_name.c_str(),"r");
+        epd_file = fopen(calib_file_name.c_str(),"rb");
         if(!epd_file) {
             printf("Calibration file not found!\n");
             fflush(stdout);
@@ -249,12 +252,20 @@ public:
 
     std::cout << "Calibrating on Batch " << counter + 1 << " of " << NUM_CAL_BATCH << "\r";
 
+    for(int i = 0; i < CAL_BATCH_SIZE; i++) {
+        for(int n = 0; n < input_layer_names.size(); n++) {
+            size_t sz = std::get<0>(input_layer_shapes[n]) *
+                        std::get<1>(input_layer_shapes[n]) *
+                        std::get<2>(input_layer_shapes[n]);
+            float* p = ((float*)buffers_h[n]) + i * sz;
+            fread(p, 1, sizeof(float) * sz, epd_file);
+        }
+    }
+
     for(int n = 0; n < input_layer_names.size(); n++) {
         size_t sz = std::get<0>(input_layer_shapes[n]) *
                     std::get<1>(input_layer_shapes[n]) *
                     std::get<2>(input_layer_shapes[n]);
-        for(int i = 0; i < sz; i++)
-            fscanf(epd_file, "%f", &((float*)buffers_h[n])[i]);
         cudaMemcpy(buffers[n], buffers_h[n], 
             CAL_BATCH_SIZE * sizeof(float) * sz, cudaMemcpyHostToDevice);
         bindings[n] = buffers[n];
@@ -436,7 +447,7 @@ void TrtModel::LoadGraph(const std::string& uff_file_name, int dev_id, int dev_t
         buffer_sizes.push_back(size);
 
 #if 1
-        printf("%d. %s %d =",i,engine->getBindingName(i),size);
+        printf("%d. %s %d =",i,engine->getBindingName(i),(int)size);
         for(size_t j = 0; j < d.nbDims; j++) 
             printf(" %d",d.d[j]);
         printf("\n");
@@ -469,18 +480,26 @@ void TrtModel::predict() {
 
     context->execute(BATCH_SIZE, buffers.data());
 
-    for(int i = 0;i < n_batch;i++) {
-
-        for(int j = 0;j < NVALUE;j++) {
-            scores[i * NVALUE + j] = buffers_h[out_index[0]][i * NVALUE + j];
-        }
-
-        for(int j = 0;j < policy_size[i];j++) {
-            int idx = policy_index[i * MAX_MOVES_NN + j];
-            float p = buffers_h[out_index[1]][i * NPOLICY + idx];
-            policy_scores[i * MAX_MOVES_NN + j] = p;
+    for(int k = 0; k < output_layer_names.size(); k++) {
+        int NN_MAX = buffer_sizes[out_index[k]];
+        float* output = buffers_h[out_index[k]];
+        
+        if(p_index[k][0] == 0) {
+            for(int i = 0;i < n_batch; i++) {
+                for(int j = 0;j < p_size[k][i];j++) {
+                    p_outputs[k][i][j] = output[i * NN_MAX + j];
+                }
+            }
+        } else {
+            for(int i = 0;i < n_batch; i++) {
+                for(int j = 0;j < p_size[k][i];j++) {
+                    int idx = p_index[k][i][j];
+                    p_outputs[k][i][j] = output[i * NN_MAX + idx];
+                }
+            }
         }
     }
+
 }
 
 #endif
@@ -490,59 +509,80 @@ void TrtModel::predict() {
 */
 static UBMP64* nn_cache;
 static UBMP32 nn_cache_mask;
+static UBMP32 hash_entry_sz;
 
 static void allocate_nn_cache(UBMP32 sizeb) {
-    UBMP32 szhash = (3 * MAX_MOVES_NN) * sizeof(short);
-    UBMP32 size = 1, size_max = sizeb / szhash;
+    hash_entry_sz = sizeof(UBMP64);
+    for(int k = 0; k < output_layer_sizes.size(); k++) {
+        hash_entry_sz += output_layer_sizes[k] * 
+                (sizeof(unsigned short) + sizeof(float));
+    }
+    hash_entry_sz = sizeof(UBMP64) * ( (hash_entry_sz + sizeof(UBMP64) - 1) / sizeof(UBMP64));
+
+    UBMP32 size = 1, size_max = sizeb / hash_entry_sz;
     while(2 * size <= size_max) size *= 2;
     nn_cache_mask = size - 1;
-    aligned_reserve<UBMP64>(nn_cache,size * (szhash / sizeof(UBMP64)) );
+    hash_entry_sz /= sizeof(UBMP64);
+    aligned_reserve<UBMP64>( nn_cache, size * hash_entry_sz );
 
-    printf("nn_cache %d X %d = %.1f MB\n",size,int(szhash),
-        (size * szhash) / double(1024 * 1024));
+    printf("nn_cache %d X %d = %.1f MB\n",size,int(hash_entry_sz * sizeof(UBMP64)),
+        (size * hash_entry_sz * sizeof(UBMP64)) / double(1024 * 1024));
     fflush(stdout);
 }
 
-static void store_nn_cache(const UBMP64 hash_key, const float* value, 
-    const float* policy, const UBMP16* index, const int count
+static void store_nn_cache(const UBMP64 hash_key,  unsigned short** const p_index,
+                           int* const p_size, float** const p_outputs
     ) {
     UBMP32 key = UBMP32(hash_key & nn_cache_mask);
-    UBMP64* const nn_hash = nn_cache + key * ((3 * MAX_MOVES_NN) / 4); 
+    UBMP64* const nn_hash = nn_cache + key * hash_entry_sz; 
     
     if(*nn_hash != hash_key) {
         *nn_hash = hash_key;
-        memcpy(nn_hash + 1, value, NVALUE * sizeof(float));
-        memcpy(nn_hash + 3, policy, count * sizeof(float));
-        memcpy(nn_hash + MAX_MOVES_NN / 2, index, count * sizeof(UBMP16));
+        UBMP16* p = (UBMP16*) (nn_hash + 1);
+        for(int k = 0; k < output_layer_names.size(); k++) {
+            memcpy(p, p_outputs[k], p_size[k] * sizeof(float));
+            p += p_size[k] * 2;
+            if(p_index[k]) {
+                memcpy(p, p_index[k], p_size[k] * sizeof(UBMP16));
+                p += p_size[k];
+            }
+        }
     }
 }
 
-static bool retrieve_nn_cache(const UBMP64 hash_key, float* value, 
-    float* policy, const UBMP16* index, const int count
+static bool retrieve_nn_cache(const UBMP64 hash_key, unsigned short** const p_index,
+                              int* const p_size, float** p_outputs
     ) {
     UBMP32 key = UBMP32(hash_key & nn_cache_mask);
-    UBMP64* const nn_hash = nn_cache + key * ((3 * MAX_MOVES_NN) / 4);
+    UBMP64* const nn_hash = nn_cache + key * hash_entry_sz;
 
     if(*nn_hash == hash_key) {
+        UBMP16* p = (UBMP16*) (nn_hash + 1);
+        for(int k = 0; k < output_layer_names.size(); k++) {
+            if(p_index[k]) {
+                float* const nn_outputs = (float*)p;
+                p += p_size[k] * 2;
+                UBMP16* const nn_index = (UBMP16*)(p);
+                p += p_size[k];
 
-        float* const nn_value = (float*)(nn_hash + 1);
-        float* const nn_policy = (float*)(nn_hash + 3);
-        UBMP16* const nn_index = (UBMP16*)(nn_hash + MAX_MOVES_NN / 2);
-
-        for(int i = 0; i < NVALUE; i++)
-            value[i] = nn_value[i];
-        for(int i = 0; i < count; i++) {
-            if(index[i] == nn_index[i]) {
-                policy[i] = nn_policy[i];
-            } else {
-                for(int j = 0; j < count; j++) {
-                    if(index[i] == nn_index[j]) {
-                        policy[i] = nn_policy[j];
-                        break;
+                for(int i = 0; i < p_size[k]; i++) {
+                    if(p_index[k][i] == nn_index[i]) {
+                        p_outputs[k][i] = nn_outputs[i];
+                    } else {
+                        for(int j = 0; j < p_size[k]; j++) {
+                            if(p_index[k][i] == nn_index[j]) {
+                                p_outputs[k][i] = nn_outputs[j];
+                                break;
+                            }
+                        }
                     }
                 }
+            } else {
+                memcpy(p_outputs[k], p, p_size[k] * sizeof(float));
+                p += p_size[k] * 2;
             }
         }
+
         return true;
     }
     return false;
@@ -576,15 +616,10 @@ DLLExport void CDECL load_neural_network(
     char* path, int nn_cache_size, int n_threads, int n_devices, 
     int dev_type, int delay, int float_type, 
     char* input_names, char* output_names,
-    char* input_shapes, char* output_shapes,
-    int max_moves
+    char* input_shapes, char* output_sizes
     ) {
 
     l_create(global_lock);
-    MAX_MOVES_NN = max_moves;
-    
-    /*Allocate cache*/
-    allocate_nn_cache(nn_cache_size);
 
     /*Message*/
     printf("Loading neural network : %s\n",path);
@@ -627,21 +662,12 @@ DLLExport void CDECL load_neural_network(
     for(int i = 0; i < num_tokens; i++)
         output_layer_names.push_back(commands[i]);
 
-    tokenize(output_shapes,commands);
-    for(int i = 0; i < num_tokens; i++) {
-        std::tuple<int,int,int> tp(
-            atoi(commands[3*i+0]),
-            atoi(commands[3*i+1]),
-            atoi(commands[3*i+2]) );
-        output_layer_shapes.push_back(tp);
+    num_tokens = tokenize(output_sizes,commands) - 1;
+    for(int i = 0; i < num_tokens; i++)
+        output_layer_sizes.push_back(atoi(commands[i]));
 
-        int sz = std::get<0>(tp) *
-                 std::get<1>(tp) *
-                 std::get<2>(tp);
-        if(i == 0) NVALUE = sz;
-        else NPOLICY = sz;
-    }
-
+    /*Allocate cache*/
+    allocate_nn_cache(nn_cache_size);
 
     /*Load tensorflow or tensorrt graphs on GPU*/
     netModel = new Model*[N_DEVICES];
@@ -671,7 +697,7 @@ DLLExport void CDECL load_neural_network(
     }
     while(nn_loaded < N_DEVICES)
         t_sleep(1);
-	delete[] tid;
+    delete[] tid;
 #if 1
     /*warm up nn*/
     for(int dev_id = 0; dev_id < N_DEVICES; dev_id++) {
@@ -679,8 +705,8 @@ DLLExport void CDECL load_neural_network(
         Model* net = netModel[dev_id];
         for(int i = 0;i < BATCH_SIZE;i++)
             add_to_batch(dev_id, 0);
-        net->predict();
         net->n_batch = 0;
+        net->predict();
     }
 #endif
     /*Message*/
@@ -720,12 +746,13 @@ static int add_to_batch(int batch_id, float** iplanes) {
 }
 
 DLLExport void  CDECL probe_neural_network(
-    float** iplanes,  unsigned short* pindex, float* probs, float* scores, 
-    int nmoves, UBMP64 hash_key, bool hard_probe) {
+    float** iplanes,  unsigned short** p_index, int* p_size,
+    float** p_outputs, UBMP64 hash_key, bool hard_probe
+    ) {
 
     //retrieve from cache
     if(!hard_probe) {
-        if(retrieve_nn_cache(hash_key,scores,probs,pindex,nmoves))
+        if(retrieve_nn_cache(hash_key,p_index,p_size,p_outputs))
             return;
     }
 
@@ -754,9 +781,12 @@ DLLExport void  CDECL probe_neural_network(
     //add to batch
     int offset = add_to_batch(batch_id, iplanes);
 
-    //policy
-    memcpy(net->policy_index + offset * MAX_MOVES_NN, pindex, nmoves * sizeof(short));
-    net->policy_size[offset] = nmoves;
+    //outputs
+    for(int i = 0; i < output_layer_names.size(); i++) {
+        net->p_index[i][offset] = p_index[i];
+        net->p_size[i][offset] = p_size[i];
+        net->p_outputs[i][offset] = p_outputs[i];
+    }
 
     //pause threads till eval completes
     if(offset + 1 < BATCH_SIZE) {
@@ -785,12 +815,8 @@ DLLExport void  CDECL probe_neural_network(
         net->wait = 0;
     }
 
-    //copy
-    memcpy(probs, net->policy_scores + offset * MAX_MOVES_NN, nmoves * sizeof(float));
-    memcpy(scores, net->scores + offset * NVALUE, NVALUE * sizeof(float));
-
     //store in cache
-    store_nn_cache(hash_key,scores,probs,pindex,nmoves);
+    store_nn_cache(hash_key,p_index,p_size,p_outputs);
 
     //Wait until all eval calls are finished
     l_lock(global_lock);
