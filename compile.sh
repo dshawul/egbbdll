@@ -8,12 +8,14 @@ TF_DIR=~/tensorflow
 mkdir -p egbbso64-nn-${OS}-cpu
 mkdir -p egbbso64-nn-${OS}-gpu
 
+cd src
 sed -i 's/^USE_TF.*/USE_TF = 0/g' Makefile
 sed -i 's/^USE_TRT.*/USE_TRT = 1/g' Makefile
 make clean; make
-cp egbbso64.so egbbso64-nn-${OS}-gpu/
+cp egbbso64.so ../egbbso64-nn-${OS}-gpu/
 sed -i 's/^USE_TF.*/USE_TF = 2/g' Makefile
 sed -i 's/^USE_TRT.*/USE_TRT = 0/g' Makefile
+cd ..
 
 DLL=`ldd egbbso64-nn-${OS}-gpu/egbbso64.so | awk '{ print $3 }' | grep libnv`
 if ! [ -z "$DLL" ]; then
@@ -28,7 +30,7 @@ if ! [ -z "$DLL" ]; then
 fi
 
 mkdir -p $TF_DIR/tensorflow/cc/egbbdll/
-cp *.cpp *.h BUILD $TF_DIR/tensorflow/cc/egbbdll/
+cp src/*.cpp src/*.h src/BUILD $TF_DIR/tensorflow/cc/egbbdll/
 cd $TF_DIR
 bazel build --config=opt --config=monolithic //tensorflow/cc/egbbdll:egbbdll64.dll
 cd -
