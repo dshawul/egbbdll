@@ -1,8 +1,8 @@
 #ifndef __CACHE__
 #define __CACHE__
 
-#include "my_types.h"
 #include <unordered_map>
+#include "my_types.h"
 
 /*
 data to be cached

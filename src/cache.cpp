@@ -1,5 +1,5 @@
-#include "cache.h"
 #include <cstring>
+#include "cache.h"
 
 CACHE* LRU_CACHE::cache;
 UBMP32 LRU_CACHE::size;

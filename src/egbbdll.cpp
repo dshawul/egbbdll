@@ -1,5 +1,13 @@
 #include "common.h"
+#define DLL_EXPORT
 #include "egbbdll.h"
+#undef DLL_EXPORT
+
+#ifdef _WIN32
+#pragma comment(linker, "/export:load_neural_network")
+#pragma comment(linker, "/export:probe_neural_network")
+#pragma comment(linker, "/export:set_num_active_searchers")
+#endif
 
 /*
 globals

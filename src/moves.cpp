@@ -558,7 +558,7 @@ const BMP8* const _sqatt_step = t_sqatt_step + 0x80;
 /*any blocking piece in between?*/
 int SEARCHER::blocked(int from, int to) const {
     register int step,sq;
-    if(step = sqatt_step(to - from)) {
+    if((step = sqatt_step(to - from))) {
         sq = from + step;
         while(board[sq] == blank && (sq != to)) sq += step;
         return (sq != to);

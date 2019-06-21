@@ -12,7 +12,9 @@ For others, they are set in Makefile
 #define PARALLEL
 #define USE_SPINLOCK
 #endif
-#define HAS_BSF HAS_POPCNT
+#ifdef HAS_BSF
+#define HAS_BSF
+#endif
 /*
 int types
 */
@@ -133,6 +135,7 @@ cache line memory alignment (64 bytes)
 
 template<typename T>
 void aligned_reserve(T*& mem,const size_t& size) {
+#ifndef __ANDROID__
     if((sizeof(T) & (sizeof(T) - 1)) == 0) {
 #ifdef _WIN32
         if(mem) _aligned_free(mem);
@@ -141,7 +144,9 @@ void aligned_reserve(T*& mem,const size_t& size) {
         if(mem) free(mem);
         posix_memalign((void**)&mem,CACHE_LINE_SIZE,size * sizeof(T));
 #endif
-    } else {
+    } else 
+#endif
+    {
         if(mem) free(mem);
         mem = (T*) malloc(size * sizeof(T));
     }
@@ -174,13 +179,16 @@ Prefetch
 */
 #if defined _WIN32
 #   include <process.h>
-#   define t_create(f,p)  _beginthread(f,0,(void*)p)
+#   define pthread_t HANDLE
+#   define t_create(h,f,p)  h=(HANDLE)_beginthread(f,0,(void*)p)
+#   define t_join(h)      WaitForSingleObject(h,INFINITE)
 #   define t_sleep(x)     Sleep(x)
 #   define t_yield()      SwitchToThread()
 #   define t_pause()      YieldProcessor()
 #else
 #   include <pthread.h>
-#   define t_create(f,p)  {pthread_t t = 0; pthread_create(&t,0,(void*(*)(void*))&f,(void*)p);}
+#   define t_create(h,f,p)  pthread_create(&h,0,(void*(*)(void*))&f,(void*)p)
+#   define t_join(h)      pthread_join((pthread_t)h,0)
 #   define t_sleep(x)     usleep((x) * 1000)
 #   define t_yield()      sched_yield()
 #   define t_pause()      asm volatile("pause\n": : :"memory")
