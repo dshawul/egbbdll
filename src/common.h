@@ -18,6 +18,17 @@
 
 using namespace std;
 
+/*
+parallel search options
+*/
+#ifdef  PARALLEL
+#   if !defined(MAX_CPUS)
+#       define MAX_CPUS             512
+#   endif
+#else
+#   define MAX_CPUS                   1
+#endif
+
 /*types*/
 enum COLORS {
     white,black,neutral
@@ -86,7 +97,6 @@ enum RESULTS{
 #define MAX_STR            256
 #define MAX_MOVES          256
 #define MAX_PLY              8
-#define MAX_CPUS           256
 
 /*square*/
 #define file(x)          ((x) &  7)
@@ -190,7 +200,7 @@ typedef struct SEARCHER{
     PSTACK pstack;
     STACK stack[MAX_PLY];
 
-    int used;
+    VOLATILE int used;
     INFO info;
     UBMP8 temp_block[BLOCK_SIZE];
     
@@ -365,7 +375,7 @@ public:
 };
 
 /*Searchers*/
-extern SEARCHER searchers[MAX_CPUS];
+extern PSEARCHER searchers;
 extern LOCK searcher_lock;
 
 void decode_fen(const char* fen_str, int& player, int& castle, int& fifty, int* pieces, int* square);

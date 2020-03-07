@@ -22,7 +22,7 @@ enum {
 
 #define WIN_SCORE        5000
 
-SEARCHER searchers[MAX_CPUS];
+PSEARCHER searchers;
 LOCK searcher_lock;
 /*
 EGBB
@@ -242,6 +242,8 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
     fflush(stdout);
 
     atexit(unload_egbb);
+
+    searchers = new SEARCHER[MAX_CPUS];
 
     init_indices();
     LRU_CACHE::alloc( cache_size );
@@ -669,21 +671,24 @@ static int eval(int player,int* piece,int* square,int wdl_score) {
  */
 int probe_egbb_xxx(int player,int* piece,int* square) {
 
-    register int score;
-
-    PSEARCHER psearcher;
-    l_lock(searcher_lock);
-    for(int i = 0;i < MAX_CPUS;i++) {
-        if(!searchers[i].used) {
-            psearcher = &searchers[i];
-            psearcher->used = 1;
-            break;
+    /*get unused searcher block*/
+    PSEARCHER psearcher = 0;
+    while(true) {
+        l_lock(searcher_lock);
+        for(int i = 0;i < MAX_CPUS;i++) {
+            if(!searchers[i].used) {
+                psearcher = &searchers[i];
+                psearcher->used = 1;
+                break;
+            }
         }
+        l_unlock(searcher_lock);
+        if(psearcher)
+            break;
     }
-    l_unlock(searcher_lock);
 
     /*get score*/
-    score = psearcher->get_score(
+    int score = psearcher->get_score(
               LOSS,WIN,
               player,piece,square);
 

@@ -25,6 +25,7 @@ ifneq ($(COMP),arm)
     DEFINES += -DHAS_PREFETCH
     DEFINES += -DUSE_SPINLOCK
 endif
+#DEFINES += -DMAX_CPUS=4096
 ############################
 # Compiler choice 
 ############################
