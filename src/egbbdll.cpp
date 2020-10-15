@@ -7,6 +7,10 @@
 #pragma comment(linker, "/export:load_neural_network")
 #pragma comment(linker, "/export:probe_neural_network")
 #pragma comment(linker, "/export:set_num_active_searchers")
+#pragma comment(linker, "/export:nnue_init")
+#pragma comment(linker, "/export:nnue_evaluate")
+#pragma comment(linker, "/export:nnue_evaluate_fen")
+#pragma comment(linker, "/export:nnue_evaluate_incremental")
 #endif
 
 /*
@@ -753,74 +757,87 @@ DLLExport void CDECL load_egbb_xmen(char* path,int cache_size,int load_options) 
 DLLExport int  CDECL probe_egbb_xmen(int player, int* piece,int* square) {
     return probe_egbb_xxx(player,piece,square);
 }
+
 /*
-fen
+FEN
 */
-void decode_fen(const char* fen_str, int& player, int& castle, int& fifty, int* piece, int* square) {
+static void decode_fen(const char* fen_str, int& player, int& castle,
+       int& fifty, int& move_number, int* piece, int* square)
+{
+  /*decode fen*/
+  int sq,index = 2;
+  const char* p = fen_str,*pfen;
+  for(int r = 7;r >= 0; r--) {
+      for(int f = 0;f <= 7;f++) {
+          sq = r * 8 + f;
+          if((pfen = strchr(piece_name,*p)) != 0) {
+              int pc = int(strchr(piece_name,*pfen) - piece_name);
+              if(pc == 1) {
+                 piece[0] = pc;
+                 square[0] = sq;
+              } else if(pc == 7) {
+                 piece[1] = pc;
+                 square[1] = sq;
+              } else {
+                 piece[index] = pc;
+                 square[index] = sq;
+                 index++;
+              }
+          } else if((pfen = strchr(rank_name,*p)) != 0) {
+              for(int i = 0;i < pfen - rank_name;i++) {
+                  f++;
+              }
+          } 
+          p++;
+      }
+      p++;
+  }
+  piece[index] = 0;
+  square[index] = 0;
 
-    /*decode fen*/
-    int sq,index = 0;
-    const char* p = fen_str,*pfen;
-    for(int r = RANK8;r >= RANK1; r--) {
-        for(int f = FILEA;f <= FILEH;f++) {
-            sq = SQ64(r,f);
-            if((pfen = strchr(piece_name,*p)) != 0) {
-                piece[index] = int(strchr(piece_name,*pfen) - piece_name);
-                square[index] = sq;
-                index++;
-            } else if((pfen = strchr(rank_name,*p)) != 0) {
-                for(int i = 0;i < pfen - rank_name;i++) {
-                    f++;
-                }
-            } 
-            p++;
-        }
-        p++;
-    }
-    piece[index] = _EMPTY;
-    square[index] = 0;
+  /*player*/
+  if((pfen = strchr(col_name,*p)) != 0)
+      player = ((pfen - col_name) >= 2);
+  p++;
+  p++;
 
-    /*player*/
-    if((pfen = strchr(col_name,*p)) != 0)
-        player = ((pfen - col_name) >= 2);
-    p++;
-    p++;
+  /*castling rights*/
+  castle = 0;
+  if(*p == '-') {
+      p++;
+  } else {
+      while((pfen = strchr(cas_name,*p)) != 0) {
+          castle |= (1 << (pfen - cas_name));
+          p++;
+      }
+  }
+  /*epsquare*/
+  int epsquare;
+  p++;
+  if(*p == '-') {
+      epsquare = 0;
+      p++;
+  } else {
+      epsquare = int(strchr(file_name,*p) - file_name);
+      p++;
+      epsquare += 16 * int(strchr(rank_name,*p) - rank_name);
+      p++;
+  }
+  square[index] = epsquare;
 
-    /*castling rights*/
-    castle = 0;
-    if(*p == '-') {
-        p++;
-    } else {
-        while((pfen = strchr(cas_name,*p)) != 0) {
-            castle |= (1 << (pfen - cas_name));
-            p++;
-        }
-    }
-    /*epsquare*/
-    int epsquare;
-    p++;
-    if(*p == '-') {
-        epsquare = 0;
-        p++;
-    } else {
-        epsquare = int(strchr(file_name,*p) - file_name);
-        p++;
-        epsquare += 16 * int(strchr(rank_name,*p) - rank_name);
-        p++;
-    }
-    square[index] = epsquare;
-
-    /*fifty & hply*/
-    int move_number;
-    p++;
-    if(*p) sscanf(p,"%d %d",&fifty,&move_number);
-    else {
-        fifty = 0;
-    }
+  /*fifty & hply*/
+  p++;
+  if(*p && *(p+1) && isdigit(*p) && ( isdigit(*(p+1)) || *(p+1) == ' ' ) ) {
+      sscanf(p,"%d %d",&fifty,&move_number);
+      if(move_number <= 0) move_number = 5;
+  } else {
+      fifty = 0;
+      move_number = 5;
+  }
 }
 
 DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
-    int piece[33],square[33],player,castle,fifty;
-    decode_fen((char*)fen_str,player,castle,fifty,piece,square);
+    int piece[33],square[33],player,castle,fifty,move_number;
+    decode_fen((char*)fen_str,player,castle,fifty,move_number,piece,square);
     return probe_egbb_xxx(player,piece,square);
 }

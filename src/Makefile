@@ -141,11 +141,14 @@ else
         endif
 endif
 
-##############################
-# Optionally bind libnnprobe
-##############################
-ifdef NNPROBE_PATH
-    LXXFLAGS += -Wl,--no-as-needed ${NNPROBE_PATH}/libnnprobe.so -Wl,--as-needed
+#############################################
+# Optionally bind libnnprobe && libnnueprobe
+#############################################
+ifdef NN_PROBE_PATH
+    LXXFLAGS += -Wl,--no-as-needed -L${NN_PROBE_PATH} -lnnprobe -Wl,--as-needed
+endif
+ifdef NNUE_PROBE_PATH
+    LXXFLAGS += -Wl,--no-as-needed -L${NNUE_PROBE_PATH} -lnnueprobe -Wl,--as-needed
 endif
 
 ######################
