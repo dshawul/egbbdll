@@ -2,9 +2,9 @@
 #include "cache.h"
 
 CACHE* LRU_CACHE::cache;
-UBMP32 LRU_CACHE::size;
-UBMP32 LRU_CACHE::used;
-std::unordered_map<UBMP64,CACHE*> 
+uint32_t LRU_CACHE::size;
+uint32_t LRU_CACHE::used;
+std::unordered_map<uint64_t,CACHE*> 
     LRU_CACHE::cacheMap;
 
 LRU_CACHE::LRU_CACHE() {
@@ -12,7 +12,7 @@ LRU_CACHE::LRU_CACHE() {
     head = 0;
     l_create(lock);
 }
-void LRU_CACHE::alloc(UBMP32 tsize) {
+void LRU_CACHE::alloc(uint32_t tsize) {
     size  = tsize / sizeof(CACHE);
     cache = new CACHE[size];
     cacheMap.reserve(size);
@@ -24,7 +24,7 @@ void LRU_CACHE::free() {
 }
 
 /*Add new block to LRU cache*/
-void LRU_CACHE::add(UBMP64 key,INFO* info) {
+void LRU_CACHE::add(uint64_t key,INFO* info) {
     CACHE* freec = 0;
     l_lock(lock);
     if(used < size) {
@@ -56,7 +56,7 @@ void LRU_CACHE::add(UBMP64 key,INFO* info) {
 }
 
 /*check lru cache for value*/
-int LRU_CACHE::get(UBMP64 key,UBMP32 probe_index,UBMP8& value) {
+int LRU_CACHE::get(uint64_t key,uint32_t probe_index,uint8_t& value) {
     l_lock(lock);
     if(cacheMap.count(key)) {
         CACHE* curr = cacheMap[key];

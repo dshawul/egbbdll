@@ -15,19 +15,11 @@ For others, they are set in Makefile
 #ifdef HAS_BSF
 #define HAS_BSF
 #endif
+
 /*
 int types
 */
 #    include <stdint.h>
-
-typedef int8_t BMP8;
-typedef uint8_t UBMP8;
-typedef int16_t BMP16;
-typedef uint16_t UBMP16;
-typedef int32_t BMP32;
-typedef uint32_t UBMP32;
-typedef int64_t BMP64;
-typedef uint64_t UBMP64;
 
 /*
 Os stuff
@@ -97,12 +89,12 @@ Intrinsic bsf
 #       define bsr(b) (63 - __builtin_clzll(b))
 #   elif defined(_WIN32)
 #       include <intrin.h>
-        FORCEINLINE int bsf(UBMP64 b) {
+        FORCEINLINE int bsf(uint64_t b) {
             unsigned long x;
             _BitScanForward64(&x, b);
             return (int) x;
         }
-        FORCEINLINE int bsr(UBMP64 b) {
+        FORCEINLINE int bsr(uint64_t b) {
             unsigned long x;
             _BitScanReverse64(&x, b);
             return (int) x;
@@ -126,45 +118,29 @@ cache line memory alignment (64 bytes)
 */
 #include <cstdlib>
 #define CACHE_LINE_SIZE  64
-
-#if defined (__GNUC__)
-#   define CACHE_ALIGN  __attribute__ ((aligned(CACHE_LINE_SIZE)))
-#else
-#   define CACHE_ALIGN __declspec(align(CACHE_LINE_SIZE))
-#endif
-
-template<typename T>
-void aligned_reserve(T*& mem,const size_t& size) {
-#ifndef __ANDROID__
-    if((sizeof(T) & (sizeof(T) - 1)) == 0) {
-#ifdef _WIN32
-        if(mem) _aligned_free(mem);
-        mem = (T*)_aligned_malloc(size * sizeof(T),CACHE_LINE_SIZE);
-#else
-        if(mem) free(mem);
-        posix_memalign((void**)&mem,CACHE_LINE_SIZE,size * sizeof(T));
-#endif
-    } else 
-#endif
-    {
-        if(mem) free(mem);
-        mem = (T*) malloc(size * sizeof(T));
-    }
-}
+#define CACHE_ALIGN alignas(CACHE_LINE_SIZE)
 
 template<typename T>
 void aligned_free(T*& mem) {
-    if((sizeof(T) & (sizeof(T) - 1)) == 0) {
 #ifdef _WIN32
-        if(mem) _aligned_free(mem);
+    if(mem) _aligned_free(mem);
 #else
-        if(mem) free(mem);
+    if(mem) free(mem);
 #endif
-    } else {
-        if(mem) free(mem);
-    }
     mem = 0;
 }
+
+template<typename T>
+void aligned_reserve(T*& mem,const size_t& size) {
+#ifdef __ANDROID__
+    mem = (T*) memalign(CACHE_LINE_SIZE,size * sizeof(T));
+#elif defined(_WIN32)
+    mem = (T*)_aligned_malloc(size * sizeof(T),CACHE_LINE_SIZE);
+#else
+    posix_memalign((void**)&mem,CACHE_LINE_SIZE,size * sizeof(T));
+#endif
+}
+
 /*
 Prefetch
 */
@@ -193,6 +169,10 @@ Prefetch
 #   define t_yield()      sched_yield()
 #   define t_pause()      asm volatile("pause\n": : :"memory")
 #endif
+#if defined __ANDROID__
+#   undef t_pause
+#   define t_pause()
+#endif
 /*
 *locks
 */
@@ -203,6 +183,8 @@ Prefetch
 #       define l_add(x,v) InterlockedExchangeAdd((unsigned*)&(x),v)
 #       define l_set16(x,v) InterlockedExchange16((short*)&(x),v)
 #       define l_add16(x,v) InterlockedExchangeAdd16((short*)&(x),v)
+#       define l_and16(x,v) InterlockedAnd16((short*)&(x),v)
+#       define l_or16(x,v) InterlockedOr16((short*)&(x),v)
 #       define l_set8(x,v) InterlockedExchange8((char*)&(x),v)
 #       define l_add8(x,v) InterlockedExchangeAdd8((char*)&(x),v)
 #       define l_and8(x,v) InterlockedAnd8((char*)&(x),v)
@@ -212,6 +194,8 @@ Prefetch
 #       define l_add(x,v) __sync_fetch_and_add(&(x),v)
 #       define l_set16(x,v) __sync_lock_test_and_set((short*)&(x),v)
 #       define l_add16(x,v) __sync_fetch_and_add((short*)&(x),v)
+#       define l_and16(x,v) __sync_fetch_and_and((short*)&(x),v)
+#       define l_or16(x,v) __sync_fetch_and_or((short*)&(x),v)
 #       define l_set8(x,v) __sync_lock_test_and_set((char*)&(x),v)
 #       define l_add8(x,v) __sync_fetch_and_add((char*)&(x),v)
 #       define l_and8(x,v) __sync_fetch_and_and((char*)&(x),v)
@@ -262,6 +246,8 @@ inline void l_barrier() {
 #    define l_add(x,v) ((x) += v)
 #    define l_set16(x,v) ((x) = v)
 #    define l_add16(x,v) ((x) += v)
+#    define l_and16(x,v) ((x) &= v)
+#    define l_or16(x,v) ((x) |= v)
 #    define l_set8(x,v) ((x) = v)
 #    define l_add8(x,v) ((x) += v)
 #    define l_and8(x,v) ((x) &= v)

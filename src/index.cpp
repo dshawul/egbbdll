@@ -4,7 +4,7 @@
 Initialize index tables and pointers
 */
 
-static const UBMP8 K_TR[64] = {
+static const uint8_t K_TR[64] = {
     0, 1, 2, 3, 3, 2, 1, 0,
     1, 4, 5, 6, 6, 5, 4, 1,
     2, 5, 7, 8, 8, 7, 5, 2,
@@ -14,7 +14,7 @@ static const UBMP8 K_TR[64] = {
     1, 4, 5, 6, 6, 5, 4, 1,
     0, 1, 2, 3, 3, 2, 1, 0
 };
-static const UBMP8 K1_TR[64] = {
+static const uint8_t K1_TR[64] = {
     0, 1, 2, 3, 4, 5, 6, 7,
     1, 8, 9,10,11,12,13,14,
     2, 9,15,16,17,18,19,20,
@@ -24,7 +24,7 @@ static const UBMP8 K1_TR[64] = {
     6,13,19,24,28,31,33,34,
     7,14,20,25,29,32,34,35
 };
-static const UBMP8 K2_TR[64] = {
+static const uint8_t K2_TR[64] = {
     0, 1, 2, 3, 3, 2, 1, 0,
     4, 5, 6, 7, 7, 6, 5, 4,
     8, 9,10,11,11,10, 9, 8,
@@ -34,7 +34,7 @@ static const UBMP8 K2_TR[64] = {
    24,25,26,27,27,26,25,24,
    28,29,30,31,31,30,29,28
 };
-static const UBMP8 _mirror64SL[] = {
+static const uint8_t _mirror64SL[] = {
      0, 0, 0, 0, 0, 0, 0, 0,
     48,40,32,24,16, 8,55,47,
     39,31,23,15,49,41,33,25,
@@ -44,7 +44,7 @@ static const UBMP8 _mirror64SL[] = {
     19,11,52,44,36,28,20,12,
      0, 0, 0, 0, 0, 0, 0, 0
 };
-static const UBMP8 _mirrorSL64[] = {
+static const uint8_t _mirrorSL64[] = {
      0, 0, 0, 0, 0, 0, 0, 0,
     13,25,37,49,55,43,31,19,
     12,24,36,48,54,42,30,18,
@@ -55,12 +55,12 @@ static const UBMP8 _mirrorSL64[] = {
      0, 0, 0, 0, 0, 0, 0, 0
 };
 
-BMP16 KK_index[4096];
-BMP16 KK_WP_index[4096];
-BMP16 KK_rotation[4096];
-BMP16 KK_WP_rotation[4096];
-BMP16 KK_square[462];
-BMP16 KK_WP_square[1806];
+int16_t KK_index[4096];
+int16_t KK_WP_index[4096];
+int16_t KK_rotation[4096];
+int16_t KK_WP_rotation[4096];
+int16_t KK_square[462];
+int16_t KK_WP_square[1806];
 
 #define SQ64SL(x)   _mirror64SL[x]
 #define SQSL64(x)   _mirrorSL64[x]

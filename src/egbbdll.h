@@ -1,5 +1,5 @@
-#ifndef __EGBBPROBE__
-#define __EGBBPROBE__
+#ifndef __EGBBDLL__
+#define __EGBBDLL__
 
 enum {_WHITE,_BLACK};
 enum {_EMPTY,_WKING,_WQUEEN,_WROOK,_WBISHOP,_WKNIGHT,_WPAWN,
@@ -8,16 +8,25 @@ enum {LOAD_NONE,LOAD_4MEN,SMART_LOAD,LOAD_5MEN,LOAD_5MEN_LZ};
 
 #define _NOTFOUND 99999
 
+/**
+* Calling convention
+*/
+#ifdef __cplusplus
+#   define EXTERNC extern "C"
+#else
+#   define EXTERNC
+#endif
+
 #if defined (_WIN32)
 #   define _CDECL __cdecl
 #ifdef DLL_EXPORT
-#   define DLLExport extern "C" __declspec(dllexport)
+#   define DLLExport EXTERNC __declspec(dllexport)
 #else
-#   define DLLExport extern "C" __declspec(dllimport)
+#   define DLLExport EXTERNC __declspec(dllimport)
 #endif
 #else
 #   define _CDECL
-#   define DLLExport extern "C"
+#   define DLLExport EXTERNC
 #endif
 
 /*4 men*/
@@ -41,6 +50,5 @@ DLLExport void _CDECL load_egbb_into_ram(int side,int* piece);
 DLLExport void _CDECL unload_egbb_from_ram(int side,int* piece);
 DLLExport void _CDECL open_egbb(int* piece);
 
-#undef _CDECL
 #endif
 

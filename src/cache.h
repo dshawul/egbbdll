@@ -10,8 +10,8 @@ data to be cached
 #define INFO_SIZE (1 << 13)
 
 struct INFO {
-    UBMP8  block[INFO_SIZE];
-    UBMP64 key;
+    uint8_t  block[INFO_SIZE];
+    uint64_t key;
 };
 /*
 cache class
@@ -35,14 +35,14 @@ public:
     CACHE* tail;
     LOCK lock;
     static CACHE* cache;
-    static UBMP32 size;
-    static UBMP32 used;
-    static std::unordered_map<UBMP64,CACHE*> cacheMap;
+    static uint32_t size;
+    static uint32_t used;
+    static std::unordered_map<uint64_t,CACHE*> cacheMap;
 public:
     LRU_CACHE();
-    void add(UBMP64,INFO* info);
-    int  get(UBMP64,UBMP32 probe_index,UBMP8& value);
-    static void alloc(UBMP32);
+    void add(uint64_t,INFO* info);
+    int  get(uint64_t,uint32_t probe_index,uint8_t& value);
+    static void alloc(uint32_t);
     static void free();
 };
 

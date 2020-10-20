@@ -163,7 +163,7 @@ enum RESULTS{
 #define BSLC_FLAG     12 
 #define WBC_FLAG      15
 
-#define MYINT     UBMP64
+#define MYINT     uint64_t
 
 /*
 Type definitions
@@ -202,7 +202,7 @@ typedef struct SEARCHER{
 
     VOLATILE int used;
     INFO info;
-    UBMP8 temp_block[BLOCK_SIZE];
+    uint8_t temp_block[BLOCK_SIZE];
     
     SEARCHER();
     ~SEARCHER();
@@ -221,7 +221,7 @@ typedef struct SEARCHER{
         int side, int* piece,int* square);
     int get_children_score(int alpha,int beta,
         int side, int* piece,int* square, bool onlyEp);
-    void get_index(MYINT& pos_index,UBMP32& tab_index,
+    void get_index(MYINT& pos_index,uint32_t& tab_index,
         int side, int* piece,int* square);
 } *PSEARCHER;
 
@@ -280,8 +280,8 @@ const char file_name[] = "abcdefgh";
 const char col_name[] = "WwBb";
 const char cas_name[] = "KQkq";
 
-extern const UBMP8* const _sqatt_pieces;
-extern const BMP8* const _sqatt_step;
+extern const uint8_t* const _sqatt_pieces;
+extern const int8_t* const _sqatt_step;
 #define sqatt_pieces(sq)        _sqatt_pieces[sq]
 #define sqatt_step(sq)          _sqatt_step[sq]
 
@@ -350,9 +350,9 @@ EGBB
 */
 class EGBB : public COMP_INFO {
 public:
-    UBMP32 id;
+    uint32_t id;
     char name[256];
-    UBMP8*  table;
+    uint8_t*  table;
     int  state;
     bool use_search;
     bool is_loaded;

@@ -5,7 +5,7 @@
  */
 void HUFFMAN::build_cann_from_length() {
 
-    UBMP32 i,j;
+    uint32_t i,j;
     int temp;
     CANN tempcann;
 
@@ -26,8 +26,8 @@ void HUFFMAN::build_cann_from_length() {
     }
 
     //assign code
-    UBMP32 code   = cann[MAX_LEAFS - 1].code;
-    UBMP8 length = cann[MAX_LEAFS - 1].length;
+    uint32_t code   = cann[MAX_LEAFS - 1].code;
+    uint8_t length = cann[MAX_LEAFS - 1].length;
 
     for(int k = MAX_LEAFS - 2; k >= 0; k--) {
         if (cann[k].length == 0) {
@@ -81,19 +81,19 @@ decode
 */
 template<bool dolz>
 int COMP_INFO::_decode(
-                    const UBMP8* in_table,
-                    UBMP8* out_table,
-                    const UBMP32 size
+                    const uint8_t* in_table,
+                    uint8_t* out_table,
+                    const uint32_t size
                  ) {
 
-    const UBMP8* in = in_table;
-    const UBMP8* ine = in_table + size;
-    UBMP8* out = out_table;
-    UBMP8* ptr;
+    const uint8_t* in = in_table;
+    const uint8_t* ine = in_table + size;
+    uint8_t* out = out_table;
+    uint8_t* ptr;
     PAIR pair;
 
-    UBMP16 j,extra;
-    UBMP32 v;
+    uint16_t j,extra;
+    uint32_t v;
     CANN  *pcann;
     HUFFMAN* phuf;
     int diff;
@@ -107,7 +107,7 @@ int COMP_INFO::_decode(
     for(j = phuf->min_length; j <= phuf->max_length;j++) {                          \
         if(!(pcann = phuf->pstart[j]))                                              \
             continue;                                                               \
-        diff = UBMP32(bs.read(j) & pcann->mask) - pcann->code;                      \
+        diff = uint32_t(bs.read(j) & pcann->mask) - pcann->code;                      \
         if(diff >= 0) {                                                             \
             x = (pcann + diff)->symbol;                                             \
             bs.trim(j);                                                             \
@@ -154,7 +154,7 @@ int COMP_INFO::_decode(
             if(dolz)
                 bso.writeliteral(v);
             else
-                *out++ = (UBMP8)v;
+                *out++ = (uint8_t)v;
         }
         if(dolz)
             bso.writebits();
@@ -168,9 +168,9 @@ int COMP_INFO::_decode(
 decode
 */
 int COMP_INFO::decode_huff(
-                    const UBMP8* in_table,
-                    UBMP8* out_table,
-                    const UBMP32 size
+                    const uint8_t* in_table,
+                    uint8_t* out_table,
+                    const uint32_t size
                  ) {
     return _decode<true>(in_table,out_table,size);
 }
@@ -178,9 +178,9 @@ int COMP_INFO::decode_huff(
 decode
 */
 int COMP_INFO::decode(
-                    const UBMP8* in_table,
-                    UBMP8* out_table,
-                    const UBMP32 size
+                    const uint8_t* in_table,
+                    uint8_t* out_table,
+                    const uint32_t size
                  ) {
     return _decode<false>(in_table,out_table,size);
 }
@@ -188,18 +188,18 @@ int COMP_INFO::decode(
 decode lz
 */
 int COMP_INFO::decode_lz(
-                    const UBMP8* in_table,
-                    UBMP8* out_table,
-                    const UBMP32 size
+                    const uint8_t* in_table,
+                    uint8_t* out_table,
+                    const uint32_t size
                  ) {
 
-    const UBMP8* in = in_table;
-    const UBMP8* ine = in_table + size;
-    UBMP8* out = out_table;
-    UBMP8* ptr;
+    const uint8_t* in = in_table;
+    const uint8_t* ine = in_table + size;
+    uint8_t* out = out_table;
+    uint8_t* ptr;
     BITSET bs(in,out);
     PAIR pair;
-    UBMP32 v;
+    uint32_t v;
 
     while(in < ine) {
         v = bs.getbits(1);
@@ -215,7 +215,7 @@ int COMP_INFO::decode_lz(
         } else {
             v = bs.getbits(LITERAL_BITS);
             //literal byte
-            *out++ = (UBMP8)v;
+            *out++ = (uint8_t)v;
         }
     }
     return int(out - out_table);
@@ -224,7 +224,7 @@ int COMP_INFO::decode_lz(
 open encoded file
 */
 bool COMP_INFO::open(FILE* myf,int type) {
-    UBMP32 i;
+    uint32_t i;
     
     pf = myf;
 
@@ -267,7 +267,7 @@ bool COMP_INFO::open(FILE* myf,int type) {
     }
 
     //read index table
-    index_table = new UBMP32[n_blocks + 1];
+    index_table = new uint32_t[n_blocks + 1];
     fread(index_table,4,(n_blocks+1),pf);
 #ifdef BIGENDIAN
     for(i = 0; i < int(n_blocks + 1);i++)

@@ -75,12 +75,12 @@ void EGBB::open(int egbb_state) {
 
     //compressed files in RAM
     if(!is_in_disk(state)) {
-        UBMP32 TB_SIZE;
+        uint32_t TB_SIZE;
         int loc = ftell(pf);
         fseek(pf,0,SEEK_END);
         TB_SIZE = ftell(pf);
         fseek(pf,loc,SEEK_SET);
-        table = new UBMP8[TB_SIZE];
+        table = new uint8_t[TB_SIZE];
         fread(table,TB_SIZE,1,pf);
     }
 
@@ -95,18 +95,18 @@ get score of indexed position
 int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
     int score;
     MYINT q;
-    UBMP32 r;
-    UBMP8 value;
+    uint32_t r;
+    uint8_t value;
 
     q = (index / 4);
-    r = UBMP32(index % 4);
+    r = uint32_t(index % 4);
 
     if(state == DECOMP_IN_RAM) {
         value = table[q];
     } else if(state == DECOMP_IN_DISK) {
-        UBMP32 block_start = UBMP32((q / BLOCK_SIZE) * BLOCK_SIZE);
-        UBMP32 probe_index = UBMP32(q - block_start);
-        UBMP64 key = (UBMP64(block_start) << 32) | id;
+        uint32_t block_start = uint32_t((q / BLOCK_SIZE) * BLOCK_SIZE);
+        uint32_t probe_index = uint32_t(q - block_start);
+        uint64_t key = (uint64_t(block_start) << 32) | id;
         psearcher->info.key = key;
         
         if(LRUcache.get(key,probe_index,value) == CACHE_HIT) {
@@ -120,11 +120,11 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
             LRUcache.add(key,&psearcher->info);
         }
     } else {
-        UBMP32 block_size;
-        UBMP32 n_blk = UBMP32(q / BLOCK_SIZE);
-        UBMP32 probe_index = UBMP32(q - (n_blk * BLOCK_SIZE));
-        UBMP32 block_start = index_table[n_blk];
-        UBMP64 key = (UBMP64(block_start) << 32) | id;
+        uint32_t block_size;
+        uint32_t n_blk = uint32_t(q / BLOCK_SIZE);
+        uint32_t probe_index = uint32_t(q - (n_blk * BLOCK_SIZE));
+        uint32_t block_start = index_table[n_blk];
+        uint64_t key = (uint64_t(block_start) << 32) | id;
         psearcher->info.key = key;
         
         if(LRUcache.get(key,probe_index,value) == CACHE_HIT) {
@@ -156,7 +156,7 @@ int EGBB::get_score(MYINT index,PSEARCHER psearcher) {
 /*
 Get index
 */
-void SEARCHER::get_index(MYINT& pos_index,UBMP32& tab_index,
+void SEARCHER::get_index(MYINT& pos_index,uint32_t& tab_index,
                int player, int* piece, int* square
                ) {
     ENUMERATOR local_enum,*penum;
@@ -210,7 +210,7 @@ void SEARCHER::get_index(MYINT& pos_index,UBMP32& tab_index,
 /*
 Open EGBB files and allocate cache
 */
-void CDECL unload_egbb() {
+void _CDECL unload_egbb() {
     LRU_CACHE::free();
     for(unordered_map<int, EGBB*>::iterator it = EGBB::egbbs.begin(); 
         it != EGBB::egbbs.end(); ++it) {
@@ -356,7 +356,7 @@ void load_egbb_xxx(char* path,int cache_size,int load_options) {
 /*
  * Exported functions
  */
-DLLExport void CDECL open_egbb(int* piece) {
+DLLExport void _CDECL open_egbb(int* piece) {
     EGBB* pegbb[2];
     ENUMERATOR* penum;
     int side,state = COMP_IN_DISK,tab_index[2];
@@ -364,18 +364,18 @@ DLLExport void CDECL open_egbb(int* piece) {
     for(side = white; side <= black;side++) ADD();
     PRESENCE();
 }
-DLLExport void CDECL load_egbb_into_ram(int side,int* piece) {
+DLLExport void _CDECL load_egbb_into_ram(int side,int* piece) {
     ENUMERATOR myenum;
     myenum.add(side,piece);
     EGBB* pegbb = EGBB::egbbs[EGBB::GetIndex(&myenum)];
     if(pegbb->state != COMP_IN_RAM) {
-        pegbb->table = new UBMP8[pegbb->cmpsize];
+        pegbb->table = new uint8_t[pegbb->cmpsize];
         fread(pegbb->table,1,pegbb->cmpsize,pegbb->pf);
         pegbb->state = COMP_IN_RAM;
     }
 }
 
-DLLExport void CDECL unload_egbb_from_ram(int side,int* piece) {
+DLLExport void _CDECL unload_egbb_from_ram(int side,int* piece) {
     ENUMERATOR myenum;
     myenum.add(side,piece);
     EGBB* pegbb = EGBB::egbbs[EGBB::GetIndex(&myenum)];
@@ -505,7 +505,7 @@ int SEARCHER::get_score(
     int score;
 
     MYINT pos_index;
-    UBMP32 tab_index;
+    uint32_t tab_index;
     EGBB* pegbb;
 
     get_index(pos_index,tab_index,
@@ -713,10 +713,10 @@ int probe_egbb_xxx(int player,int* piece,int* square) {
 /*
 4 men
 */
-DLLExport void CDECL load_egbb(char* path) {
+DLLExport void _CDECL load_egbb(char* path) {
     load_egbb_xxx(path,4194304,LOAD_4MEN);
 }
-DLLExport int CDECL probe_egbb(int player, int w_king, int b_king,
+DLLExport int _CDECL probe_egbb(int player, int w_king, int b_king,
                 int piece1, int square1,
                 int piece2, int square2
                ) {
@@ -731,10 +731,10 @@ DLLExport int CDECL probe_egbb(int player, int w_king, int b_king,
 /*
 5 men
 */
-DLLExport void CDECL load_egbb_5men(char* path,int cache_size,int load_options) {
+DLLExport void _CDECL load_egbb_5men(char* path,int cache_size,int load_options) {
         load_egbb_xxx(path,cache_size,load_options);
 }
-DLLExport int  CDECL probe_egbb_5men(int player, int w_king, int b_king,
+DLLExport int  _CDECL probe_egbb_5men(int player, int w_king, int b_king,
                 int piece1, int square1,
                 int piece2, int square2,
                 int piece3, int square3
@@ -751,18 +751,18 @@ DLLExport int  CDECL probe_egbb_5men(int player, int w_king, int b_king,
 /*
 x men
 */
-DLLExport void CDECL load_egbb_xmen(char* path,int cache_size,int load_options) {
+DLLExport void _CDECL load_egbb_xmen(char* path,int cache_size,int load_options) {
         load_egbb_xxx(path,cache_size,load_options);
 }
-DLLExport int  CDECL probe_egbb_xmen(int player, int* piece,int* square) {
+DLLExport int  _CDECL probe_egbb_xmen(int player, int* piece,int* square) {
     return probe_egbb_xxx(player,piece,square);
 }
 
 /*
 FEN
 */
-static void decode_fen(const char* fen_str, int& player, int& castle,
-       int& fifty, int& move_number, int* piece, int* square)
+static void decode_fen(const char* fen_str, int* player, int* castle,
+       int* fifty, int* move_number, int* piece, int* square)
 {
   /*decode fen*/
   int sq,index = 2;
@@ -771,7 +771,7 @@ static void decode_fen(const char* fen_str, int& player, int& castle,
       for(int f = 0;f <= 7;f++) {
           sq = r * 8 + f;
           if((pfen = strchr(piece_name,*p)) != 0) {
-              int pc = int(strchr(piece_name,*pfen) - piece_name);
+              int pc = (int)(strchr(piece_name,*pfen) - piece_name);
               if(pc == 1) {
                  piece[0] = pc;
                  square[0] = sq;
@@ -797,17 +797,17 @@ static void decode_fen(const char* fen_str, int& player, int& castle,
 
   /*player*/
   if((pfen = strchr(col_name,*p)) != 0)
-      player = ((pfen - col_name) >= 2);
+      *player = ((pfen - col_name) >= 2);
   p++;
   p++;
 
   /*castling rights*/
-  castle = 0;
+  *castle = 0;
   if(*p == '-') {
       p++;
   } else {
       while((pfen = strchr(cas_name,*p)) != 0) {
-          castle |= (1 << (pfen - cas_name));
+          *castle |= (1 << (pfen - cas_name));
           p++;
       }
   }
@@ -818,9 +818,9 @@ static void decode_fen(const char* fen_str, int& player, int& castle,
       epsquare = 0;
       p++;
   } else {
-      epsquare = int(strchr(file_name,*p) - file_name);
+      epsquare = (int)(strchr(file_name,*p) - file_name);
       p++;
-      epsquare += 16 * int(strchr(rank_name,*p) - rank_name);
+      epsquare += 16 * (int)(strchr(rank_name,*p) - rank_name);
       p++;
   }
   square[index] = epsquare;
@@ -828,16 +828,16 @@ static void decode_fen(const char* fen_str, int& player, int& castle,
   /*fifty & hply*/
   p++;
   if(*p && *(p+1) && isdigit(*p) && ( isdigit(*(p+1)) || *(p+1) == ' ' ) ) {
-      sscanf(p,"%d %d",&fifty,&move_number);
-      if(move_number <= 0) move_number = 5;
+      sscanf(p,"%d %d",fifty,move_number);
+      if(*move_number <= 0) *move_number = 1;
   } else {
-      fifty = 0;
-      move_number = 5;
+      *fifty = 0;
+      *move_number = 1;
   }
 }
 
-DLLExport int  CDECL probe_egbb_fen(char* fen_str) {
+DLLExport int _CDECL probe_egbb_fen(char* fen_str) {
     int piece[33],square[33],player,castle,fifty,move_number;
-    decode_fen((char*)fen_str,player,castle,fifty,move_number,piece,square);
+    decode_fen((char*)fen_str,&player,&castle,&fifty,&move_number,piece,square);
     return probe_egbb_xxx(player,piece,square);
 }

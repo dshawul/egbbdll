@@ -514,7 +514,7 @@ void SEARCHER::set_pos(int side,int* piece,int* square) {
     pstack = stack + 0;
 }
 /*attacks*/
-static const UBMP8 t_sqatt_pieces[] = {
+static const uint8_t t_sqatt_pieces[] = {
   0,  0,  0,  0,  0,  0,  0,  0,  0, 10,  0,  0,  0,  0,  0,  0,
   6,  0,  0,  0,  0,  0,  0, 10,  0,  0, 10,  0,  0,  0,  0,  0,
   6,  0,  0,  0,  0,  0, 10,  0,  0,  0,  0, 10,  0,  0,  0,  0,
@@ -533,7 +533,7 @@ static const UBMP8 t_sqatt_pieces[] = {
   6,  0,  0,  0,  0,  0,  0, 10,  0,  0,  0,  0,  0,  0,  0,  0
 };
 
-static const BMP8 t_sqatt_step[] = {
+static const int8_t t_sqatt_step[] = {
   0,  0,  0,  0,  0,  0,  0,  0,  0,-17,  0,  0,  0,  0,  0,  0,
 -16,  0,  0,  0,  0,  0,  0,-15,  0,  0,-17,  0,  0,  0,  0,  0,
 -16,  0,  0,  0,  0,  0,-15,  0,  0,  0,  0,-17,  0,  0,  0,  0,
@@ -552,8 +552,8 @@ static const BMP8 t_sqatt_step[] = {
  16,  0,  0,  0,  0,  0,  0, 17,  0,  0,  0,  0,  0,  0,  0,  0
 };
 
-const UBMP8* const _sqatt_pieces = t_sqatt_pieces + 0x80;
-const BMP8* const _sqatt_step = t_sqatt_step + 0x80;
+const uint8_t* const _sqatt_pieces = t_sqatt_pieces + 0x80;
+const int8_t* const _sqatt_step = t_sqatt_step + 0x80;
 
 /*any blocking piece in between?*/
 int SEARCHER::blocked(int from, int to) const {

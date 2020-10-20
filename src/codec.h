@@ -1,5 +1,5 @@
-#ifndef __COMPRESS__
-#define __COMPRESS__
+#ifndef __CODEC__
+#define __CODEC__
 
 #ifdef _MSC_VER
 #    define _CRT_SECURE_NO_DEPRECATE
@@ -69,12 +69,12 @@ struct PAIR {
 
 /*bitset*/
 class BITSET {
-    UBMP64 code;
-    UBMP16 length;
-    const UBMP8*& in;
-    UBMP8*& out;
+    uint64_t code;
+    uint16_t length;
+    const uint8_t*& in;
+    uint8_t*& out;
 public:
-    BITSET(const UBMP8*& input,UBMP8*& output) : 
+    BITSET(const uint8_t*& input,uint8_t*& output) : 
         in(input),out(output) {
         code = 0;
         length = 0;
@@ -85,30 +85,30 @@ public:
             length += 8;                                       
         }   
     }
-    UBMP32 getbits(int x) {
+    uint32_t getbits(int x) {
         addbits(x);                                          
         length -= x;                                     
-        return UBMP32(code >> length) & (_byte_32 >> (32 - x)); 
+        return uint32_t(code >> length) & (_byte_32 >> (32 - x)); 
     }
     void writebits() {
         while(length >= 8) {
             length -= 8;
-            *out++ = UBMP8((code >> length) & _byte_1);
+            *out++ = uint8_t((code >> length) & _byte_1);
             code &= (_byte_all >> (64 - length));
         }
     }
     void flushbits() {
         if(length) {
             length -= 8;
-            *out++ = UBMP8((code  << (-length)) & _byte_1);
+            *out++ = uint8_t((code  << (-length)) & _byte_1);
         }
     }
     void write(int value, int len) {
         code = ((code << len) | (value));
         length += len;
     }
-    UBMP32 read(int len) {
-        return UBMP32(code >> (length - len));
+    uint32_t read(int len) {
+        return uint32_t(code >> (length - len));
     }
     void trim(int len) {
         length -= len;
@@ -132,8 +132,8 @@ huffman tree
 */
 struct NODE {
     int   symbol;
-    UBMP32 freq;
-    UBMP8  skip;
+    uint32_t freq;
+    uint8_t  skip;
     NODE*  left;
     NODE*  right;
     NODE() {
@@ -150,9 +150,9 @@ struct NODE {
 
 struct CANN {
     int   symbol;
-    UBMP32 code;
-    UBMP32 mask;
-    UBMP8 length;
+    uint32_t code;
+    uint32_t mask;
+    uint8_t length;
     CANN() {
         symbol = INVALID;
         code = 0;
@@ -164,10 +164,10 @@ struct HUFFMAN {
     NODE*   nodes;
     CANN*   cann;
     CANN*   pstart[MAX_LEN];
-    UBMP8   min_length,
+    uint8_t   min_length,
             max_length;
-    UBMP32  MAX_LEAFS;
-    UBMP32  MAX_NODES;
+    uint32_t  MAX_LEAFS;
+    uint32_t  MAX_NODES;
     void clear_nodes();
     void build_cann_from_nodes();
     void build_cann_from_length();
@@ -182,8 +182,8 @@ class COMP_INFO {
 public:
     FILE*   pf;
     char    output_fname[256];
-    UBMP32* index_table;
-    UBMP32  size,
+    uint32_t* index_table;
+    uint32_t  size,
             orgsize,
             cmpsize,
             n_blocks,
@@ -197,15 +197,15 @@ public:
     bool open(FILE*,int);
     void compress(FILE*,FILE*,int=0);
     void decompress(FILE*,FILE*,int=0);
-    int encode_huff(const UBMP8*,UBMP8*,const UBMP32);
-    int encode_lz(const UBMP8*,UBMP8*,const UBMP32);
+    int encode_huff(const uint8_t*,uint8_t*,const uint32_t);
+    int encode_lz(const uint8_t*,uint8_t*,const uint32_t);
     template<bool> 
-    int _decode(const UBMP8*,UBMP8*,const UBMP32);
-    int decode(const UBMP8*,UBMP8*,const UBMP32);
-    int decode_huff(const UBMP8*,UBMP8*,const UBMP32);
-    int decode_lz(const UBMP8*,UBMP8*,const UBMP32);
+    int _decode(const uint8_t*,uint8_t*,const uint32_t);
+    int decode(const uint8_t*,uint8_t*,const uint32_t);
+    int decode_huff(const uint8_t*,uint8_t*,const uint32_t);
+    int decode_lz(const uint8_t*,uint8_t*,const uint32_t);
     void write_crc(bool);
-    void collect_frequency(const UBMP8*,const UBMP32);
+    void collect_frequency(const uint8_t*,const uint32_t);
 };
 
 unsigned long Crc32_ComputeBuf(unsigned long inCrc32, const void *buf,unsigned int bufLen);
