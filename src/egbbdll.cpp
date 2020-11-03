@@ -11,6 +11,10 @@
 #pragma comment(linker, "/export:nnue_evaluate")
 #pragma comment(linker, "/export:nnue_evaluate_fen")
 #pragma comment(linker, "/export:nnue_evaluate_incremental")
+#pragma comment(linker, "/export:nncpu_init")
+#pragma comment(linker, "/export:nncpu_evaluate")
+#pragma comment(linker, "/export:nncpu_evaluate_fen")
+#pragma comment(linker, "/export:nncpu_evaluate_incremental")
 #endif
 
 /*

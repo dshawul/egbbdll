@@ -150,6 +150,9 @@ endif
 ifdef NNUE_PROBE_PATH
     LXXFLAGS += -Wl,--no-as-needed -L${NNUE_PROBE_PATH} -lnnueprobe -Wl,--as-needed
 endif
+ifdef NNCPU_PROBE_PATH
+    LXXFLAGS += -Wl,--no-as-needed -L${NNCPU_PROBE_PATH} -lnncpuprobe -Wl,--as-needed
+endif
 
 ######################
 # Rules
